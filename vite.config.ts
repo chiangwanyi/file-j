@@ -8,6 +8,18 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(() => ({
   plugins: [vue()],
 
+  build: {
+    // macOS 12 ships Safari 15 / WKWebView. Vite's default target is newer, so
+    // we pin the output to what the oldest supported OS can parse. This is also
+    // why Tailwind stays on v3 (v4 needs Safari 16.4 for @property/color-mix).
+    target: ["safari15"],
+    cssTarget: ["safari15"],
+    sourcemap: false,
+  },
+  esbuild: {
+    target: "safari15",
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors

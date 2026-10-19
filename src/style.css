@@ -1,0 +1,208 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ------------------------------------------------------------------ tokens */
+/* Light theme is the default. Values are RGB triplets so Tailwind's
+   `<alpha-value>` opacity modifiers keep working. */
+:root {
+  color-scheme: light;
+  --c-bg: 240 240 243;
+  --c-panel: 255 255 255;
+  --c-elevated: 255 255 255;
+  --c-sidebar: 234 234 238;
+  --c-line: 208 208 214;
+  --c-ink: 29 29 31;
+  --c-muted: 120 120 128;
+  --c-accent: 0 112 240;
+  --c-danger: 215 45 45;
+  --c-success: 36 148 76;
+}
+
+.dark {
+  color-scheme: dark;
+  --c-bg: 26 26 28;
+  --c-panel: 34 34 37;
+  --c-elevated: 44 44 48;
+  --c-sidebar: 24 24 26;
+  --c-line: 58 58 63;
+  --c-ink: 242 242 245;
+  --c-muted: 148 148 156;
+  --c-accent: 10 132 255;
+  --c-danger: 255 92 92;
+  --c-success: 61 199 114;
+}
+
+/* ------------------------------------------------------------------- base */
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
+    "Helvetica Neue", Arial, sans-serif;
+  font-size: 12px;
+  color: rgb(var(--c-ink));
+  background: rgb(var(--c-bg));
+  overflow: hidden;
+  /* A file manager is a direct-manipulation surface: text selection inside
+     tables only fights with drag & drop. Inputs opt back in below. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+input,
+textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* Slim overlay scrollbars, macOS style. */
+::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgb(var(--c-ink) / 0.18);
+  border-radius: 6px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--c-ink) / 0.32);
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+::selection {
+  background: rgb(var(--c-accent) / 0.25);
+}
+
+/* ------------------------------------------------------------- components */
+@layer components {
+  .btn {
+    @apply inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[12px]
+      font-medium text-ink/90 transition-colors;
+  }
+  .btn:hover {
+    @apply bg-ink/[0.06];
+  }
+  .btn:active {
+    @apply bg-ink/[0.1];
+  }
+  .btn:disabled {
+    @apply cursor-default text-muted/60;
+  }
+  .btn:disabled:hover {
+    @apply bg-transparent;
+  }
+
+  .btn-primary {
+    @apply inline-flex h-7 items-center justify-center gap-1.5 rounded-md
+      bg-accent px-3 text-[12px] font-medium text-white transition-opacity;
+  }
+  .btn-primary:hover {
+    @apply opacity-90;
+  }
+  .btn-primary:active {
+    @apply opacity-80;
+  }
+  .btn-primary:disabled {
+    @apply cursor-default opacity-40;
+  }
+
+  .btn-ghost-danger {
+    @apply inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[12px]
+      font-medium text-danger transition-colors;
+  }
+  .btn-ghost-danger:hover {
+    @apply bg-danger/10;
+  }
+
+  .icon-btn {
+    @apply inline-flex h-7 w-7 items-center justify-center rounded-md
+      text-muted transition-colors;
+  }
+  .icon-btn:hover {
+    @apply bg-ink/[0.06] text-ink;
+  }
+  .icon-btn:active {
+    @apply bg-ink/[0.1];
+  }
+  .icon-btn:disabled {
+    @apply cursor-default text-muted/40;
+  }
+  .icon-btn:disabled:hover {
+    @apply bg-transparent text-muted/40;
+  }
+
+  .field {
+    @apply h-7 w-full rounded-md border border-line/70 bg-panel px-2 text-[12px]
+      text-ink outline-none transition-shadow placeholder:text-muted/70;
+  }
+  .field:focus {
+    @apply border-accent/70;
+    box-shadow: 0 0 0 3px rgb(var(--c-accent) / 0.16);
+  }
+
+  .segmented {
+    @apply inline-flex items-center rounded-[7px] bg-ink/[0.06] p-0.5;
+  }
+  .segmented > button {
+    @apply inline-flex h-6 items-center gap-1 rounded-[5px] px-2 text-[11px]
+      font-medium text-muted transition-colors;
+  }
+  .segmented > button[data-active="true"] {
+    @apply bg-panel text-ink shadow-sm;
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px]
+      font-medium leading-none;
+  }
+
+  .menu-item {
+    @apply flex h-7 w-full items-center gap-2 rounded-[5px] px-2 text-left
+      text-[12px] text-ink transition-colors;
+  }
+  .menu-item:hover {
+    @apply bg-accent text-white;
+  }
+  .menu-item:hover .menu-hint {
+    @apply text-white/70;
+  }
+  .menu-item:disabled {
+    @apply cursor-default text-muted/60;
+  }
+  .menu-item:disabled:hover {
+    @apply bg-transparent text-muted/60;
+  }
+  .menu-sep {
+    @apply my-1 h-px bg-line/70;
+  }
+}
+
+/* The toolbar is a drag handle for the window, but its controls are not. */
+[data-tauri-drag-region] {
+  -webkit-app-region: drag;
+}
+[data-tauri-drag-region] button,
+[data-tauri-drag-region] input,
+[data-tauri-drag-region] a,
+[data-tauri-drag-region] select {
+  -webkit-app-region: no-drag;
+}
+
+/* Prevent the "text cursor" flash while dragging rows. */
+.dragging,
+.dragging * {
+  cursor: grabbing !important;
+}

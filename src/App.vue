@@ -1,160 +1,276 @@
 <script setup lang="ts">
-import { ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import Toolbar from "./components/Toolbar.vue";
+import Sidebar from "./components/Sidebar.vue";
+import Pane from "./components/Pane.vue";
+import TransferPanel from "./components/TransferPanel.vue";
+import StatusBar from "./components/StatusBar.vue";
+import SessionDialog from "./components/SessionDialog.vue";
+import SettingsDialog from "./components/SettingsDialog.vue";
+import SimpleDialogs from "./components/SimpleDialogs.vue";
+import ToastStack from "./components/ToastStack.vue";
+import Icon from "./components/Icon.vue";
+import {
+  boot,
+  createFolder,
+  deleteSelection,
+  goBack,
+  goForward,
+  goUp,
+  navigate,
+  openEntry,
+  pane,
+  refreshAll,
+  refreshPane,
+  selectAll,
+  selectByPath,
+  selectedEntries,
+  setSplitRatio,
+  sortedEntries,
+  startTransfer,
+  state,
+  transferSelection,
+} from "./stores/workspace";
 
-const greetMsg = ref("");
-const name = ref("");
+const splitContainer = ref<HTMLElement | null>(null);
+const dragging = ref(false);
 
-async function greet() {
-  // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-  greetMsg.value = await invoke("greet", { name: name.value });
+const leftWidth = computed(() => `${state.splitRatio * 100}%`);
+const leftActive = computed(() => selectedEntries("left").length > 0);
+const rightActive = computed(() => selectedEntries("right").length > 0);
+
+function startSplitDrag(event: MouseEvent) {
+  if (!splitContainer.value) return;
+  event.preventDefault();
+  dragging.value = true;
+  const rect = splitContainer.value.getBoundingClientRect();
+  const onMove = (moveEvent: MouseEvent) => {
+    const ratio = (moveEvent.clientX - rect.left) / rect.width;
+    state.splitRatio = Math.min(0.75, Math.max(0.25, ratio));
+  };
+  const onUp = () => {
+    dragging.value = false;
+    window.removeEventListener("mousemove", onMove);
+    window.removeEventListener("mouseup", onUp);
+    setSplitRatio(state.splitRatio);
+  };
+  window.addEventListener("mousemove", onMove);
+  window.addEventListener("mouseup", onUp);
 }
+
+function isTextInput(target: EventTarget | null): boolean {
+  const element = target as HTMLElement | null;
+  if (!element) return false;
+  const tag = element.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || element.isContentEditable;
+}
+
+function moveSelection(delta: number) {
+  const key = state.active;
+  const list = sortedEntries(key);
+  if (!list.length) return;
+  const current = pane(key).selection;
+  let index = current.length ? list.findIndex((entry) => entry.path === current[current.length - 1]) : -1;
+  index = Math.min(list.length - 1, Math.max(0, index + delta));
+  const target = list[index];
+  selectByPath(key, target.path);
+  void nextTick(() => {
+    const nodes = document.querySelectorAll<HTMLElement>("[data-path]");
+    for (const node of nodes) {
+      if (node.dataset.path === target.path) {
+        node.scrollIntoView({ block: "nearest" });
+        break;
+      }
+    }
+  });
+}
+
+function onKeydown(event: KeyboardEvent) {
+  if (event.key === "Escape") {
+    if (state.dialog.session || state.dialog.settings) {
+      state.dialog.session = false;
+      state.dialog.settings = false;
+      return;
+    }
+  }
+  if (isTextInput(event.target)) return;
+  if (
+    state.dialog.session ||
+    state.dialog.settings ||
+    state.dialog.prompt ||
+    state.dialog.confirm ||
+    state.dialog.password
+  ) {
+    return;
+  }
+
+  const key = state.active;
+  const meta = event.metaKey || event.ctrlKey;
+
+  if (event.key === "F5") {
+    event.preventDefault();
+    void transferSelection(key, "copy");
+  } else if (event.key === "F6") {
+    event.preventDefault();
+    void transferSelection(key, "move");
+  } else if (event.key === "Enter") {
+    const entries = selectedEntries(key);
+    if (entries.length === 1) {
+      event.preventDefault();
+      void openEntry(key, entries[0]);
+    }
+  } else if (event.key === "Backspace") {
+    event.preventDefault();
+    if (meta) void deleteSelection(key);
+    else void goUp(key);
+  } else if (event.key === "Delete") {
+    event.preventDefault();
+    void deleteSelection(key);
+  } else if (event.key === "ArrowDown") {
+    event.preventDefault();
+    moveSelection(1);
+  } else if (event.key === "ArrowUp") {
+    event.preventDefault();
+    moveSelection(-1);
+  } else if (event.key === "ArrowRight" && meta) {
+    event.preventDefault();
+    void goForward(key);
+  } else if (event.key === "ArrowLeft" && meta) {
+    event.preventDefault();
+    void goBack(key);
+  } else if (meta && event.key.toLowerCase() === "r") {
+    event.preventDefault();
+    void refreshPane(key);
+  } else if (meta && event.key.toLowerCase() === "a") {
+    event.preventDefault();
+    selectAll(key);
+  } else if (meta && event.shiftKey && event.key.toLowerCase() === "n") {
+    event.preventDefault();
+    createFolder(key);
+  } else if (meta && event.shiftKey && event.key.toLowerCase() === "r") {
+    event.preventDefault();
+    void refreshAll();
+  } else if (event.key === "Home") {
+    event.preventDefault();
+    void navigate(key, "/");
+  }
+}
+
+onMounted(() => {
+  void boot();
+  window.addEventListener("keydown", onKeydown);
+});
+
+function reloadApp() {
+  window.location.reload();
+}
+
+onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
 </script>
 
 <template>
-  <main class="container">
-    <h1>Welcome to Tauri + Vue</h1>
-
-    <div class="row">
-      <a href="https://vite.dev" target="_blank">
-        <img src="/vite.svg" class="logo vite" alt="Vite logo" />
-      </a>
-      <a href="https://tauri.app" target="_blank">
-        <img src="/tauri.svg" class="logo tauri" alt="Tauri logo" />
-      </a>
-      <a href="https://vuejs.org/" target="_blank">
-        <img src="./assets/vue.svg" class="logo vue" alt="Vue logo" />
-      </a>
+  <!-- splash -->
+  <div v-if="!state.ready" class="flex h-full flex-col items-center justify-center gap-4 bg-bg">
+    <div
+      class="flex h-14 w-14 items-center justify-center rounded-[14px] bg-gradient-to-b from-[#4aa3ff] to-[#0a6cf0] shadow-lg"
+    >
+      <Icon name="folder" :size="28" :stroke="1.7" class="text-white" />
     </div>
-    <p>Click on the Tauri, Vite, and Vue logos to learn more.</p>
+    <div class="text-center">
+      <p class="text-[13px] font-semibold">file-j</p>
+      <p class="mt-1 text-[11px] text-muted">正在启动 Go 后端服务…</p>
+    </div>
+    <div class="h-1 w-36 overflow-hidden rounded-full bg-ink/10">
+      <div class="h-full w-1/3 animate-indeterminate rounded-full bg-accent" />
+    </div>
+  </div>
 
-    <form class="row" @submit.prevent="greet">
-      <input id="greet-input" v-model="name" placeholder="Enter a name..." />
-      <button type="submit">Greet</button>
-    </form>
-    <p>{{ greetMsg }}</p>
-  </main>
+  <!-- boot failure -->
+  <div v-else-if="state.bootError" class="flex h-full items-center justify-center bg-bg p-8">
+    <div class="w-full max-w-[460px] rounded-[12px] border border-line/60 bg-elevated p-5 shadow-pane">
+      <div class="flex items-start gap-3">
+        <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-danger/10 text-danger">
+          <Icon name="alert" :size="16" />
+        </div>
+        <div class="min-w-0">
+          <p class="text-[13px] font-semibold">后端服务未能启动</p>
+          <p class="mt-1 break-words text-[11.5px] leading-[1.5] text-muted">{{ state.bootError }}</p>
+        </div>
+      </div>
+      <div class="mt-4 rounded-[7px] bg-ink/[0.04] px-3 py-2 text-[10.5px] leading-[1.6] text-muted">
+        请确认 <code class="font-mono">src-tauri/binaries/file-jd-*</code> 存在（运行
+        <code class="font-mono">pnpm backend:build</code>），或查看日志
+        <span class="break-all font-mono">{{ state.configDir || "~/Library/Application Support/file-j" }}/logs/backend.log</span>
+      </div>
+      <div class="mt-4 flex justify-end gap-2">
+        <button class="btn" @click="refreshAll()">重试连接</button>
+        <button class="btn-primary" @click="reloadApp">重新启动</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- main workspace -->
+  <div v-else class="flex h-full flex-col bg-bg">
+    <Toolbar />
+
+    <div class="flex min-h-0 flex-1">
+      <Sidebar v-if="state.sidebarOpen" />
+
+      <div
+        ref="splitContainer"
+        class="flex min-h-0 min-w-0 flex-1 p-2"
+        :class="{ 'select-none': dragging }"
+      >
+        <div
+          class="flex min-w-0 overflow-hidden rounded-[9px] border border-line/60 bg-panel shadow-pane"
+          :style="{ width: leftWidth }"
+        >
+          <Pane pane-key="left" />
+        </div>
+
+        <!-- splitter with the classic dual-pane transfer buttons -->
+        <div class="group relative w-[13px] shrink-0 cursor-col-resize" @mousedown="startSplitDrag">
+          <div
+            class="absolute bottom-3 left-1/2 top-3 w-px -translate-x-1/2 bg-line/70 transition-colors group-hover:bg-accent/60"
+          />
+          <div
+            class="absolute left-1/2 top-1/2 z-10 flex -translate-x-1/2 -translate-y-1/2 flex-col gap-1"
+          >
+            <button
+              class="flex h-[21px] w-[21px] items-center justify-center rounded-full border border-line/70 bg-panel text-muted shadow-sm transition-colors hover:border-accent/50 hover:text-accent disabled:opacity-40 disabled:hover:border-line/70 disabled:hover:text-muted"
+              title="把左侧选中项复制到右侧"
+              :disabled="!leftActive"
+              @mousedown.stop
+              @click="startTransfer('left', selectedEntries('left'), 'copy')"
+            >
+              <Icon name="chevron-right" :size="12" :stroke="2.2" />
+            </button>
+            <button
+              class="flex h-[21px] w-[21px] items-center justify-center rounded-full border border-line/70 bg-panel text-muted shadow-sm transition-colors hover:border-accent/50 hover:text-accent disabled:opacity-40 disabled:hover:border-line/70 disabled:hover:text-muted"
+              title="把右侧选中项复制到左侧"
+              :disabled="!rightActive"
+              @mousedown.stop
+              @click="startTransfer('right', selectedEntries('right'), 'copy')"
+            >
+              <Icon name="chevron-left" :size="12" :stroke="2.2" />
+            </button>
+          </div>
+        </div>
+
+        <div
+          class="flex min-w-0 flex-1 overflow-hidden rounded-[9px] border border-line/60 bg-panel shadow-pane"
+        >
+          <Pane pane-key="right" />
+        </div>
+      </div>
+    </div>
+
+    <TransferPanel />
+    <StatusBar />
+
+    <SessionDialog />
+    <SettingsDialog />
+    <SimpleDialogs />
+    <ToastStack />
+  </div>
 </template>
-
-<style scoped>
-.logo.vite:hover {
-  filter: drop-shadow(0 0 2em #747bff);
-}
-
-.logo.vue:hover {
-  filter: drop-shadow(0 0 2em #249b73);
-}
-
-</style>
-<style>
-:root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 400;
-
-  color: #0f0f0f;
-  background-color: #f6f6f6;
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  -webkit-text-size-adjust: 100%;
-}
-
-.container {
-  margin: 0;
-  padding-top: 10vh;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  text-align: center;
-}
-
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: 0.75s;
-}
-
-.logo.tauri:hover {
-  filter: drop-shadow(0 0 2em #24c8db);
-}
-
-.row {
-  display: flex;
-  justify-content: center;
-}
-
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-
-a:hover {
-  color: #535bf2;
-}
-
-h1 {
-  text-align: center;
-}
-
-input,
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
-  transition: border-color 0.25s;
-  box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
-}
-
-button {
-  cursor: pointer;
-}
-
-button:hover {
-  border-color: #396cd8;
-}
-button:active {
-  border-color: #396cd8;
-  background-color: #e8e8e8;
-}
-
-input,
-button {
-  outline: none;
-}
-
-#greet-input {
-  margin-right: 5px;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    color: #f6f6f6;
-    background-color: #2f2f2f;
-  }
-
-  a:hover {
-    color: #24c8db;
-  }
-
-  input,
-  button {
-    color: #ffffff;
-    background-color: #0f0f0f98;
-  }
-  button:active {
-    background-color: #0f0f0f69;
-  }
-}
-
-</style>

@@ -7,18 +7,25 @@
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "backend:build": "bash scripts/build-backend.sh",
+    "backend:run": "cd backend && go run ./cmd/file-jd --addr 127.0.0.1:47121 --token dev --config-dir ./.devconfig",
+    "backend:test": "cd backend && go test ./...",
+    "web:dev": "vite"
   },
   "dependencies": {
-    "vue": "^3.5.13",
     "@tauri-apps/api": "^2",
-    "@tauri-apps/plugin-opener": "^2"
+    "@tauri-apps/plugin-opener": "^2",
+    "vue": "^3.5.13"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2",
     "@vitejs/plugin-vue": "^6.0.7",
+    "autoprefixer": "^10.6.1",
+    "postcss": "^8.5.30",
+    "tailwindcss": "3.4.17",
     "typescript": "~6.0.3",
     "vite": "^8.0.16",
-    "vue-tsc": "^3.3.5",
-    "@tauri-apps/cli": "^2"
+    "vue-tsc": "^3.3.5"
   }
 }

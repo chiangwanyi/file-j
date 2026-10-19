@@ -22,3 +22,11 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# build artifacts
+src-tauri/binaries/
+src-tauri/target/
+backend/bin/
+
+# local development config (contains demo sessions/credentials refs)
+.devconfig/
