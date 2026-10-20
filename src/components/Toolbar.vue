@@ -76,9 +76,13 @@ async function toggleTheme() {
 </script>
 
 <template>
+  <!-- `data-tauri-drag-region="deep"` = the whole subtree is a drag handle,
+       except interactive elements (button/a/input/select/label/…), which Tauri's
+       drag script skips on its own. A bare attribute only matched this element
+       itself, so clicks on any child (e.g. the flex-1 spacer) never dragged. -->
   <header
     class="flex h-[52px] shrink-0 items-center gap-2 border-b border-line/70 bg-sidebar/60 pl-[80px] pr-3 backdrop-blur-xl"
-    data-tauri-drag-region
+    data-tauri-drag-region="deep"
   >
     <!-- brand -->
     <div class="flex items-center gap-2 pr-1">
@@ -115,6 +119,7 @@ async function toggleTheme() {
       <div
         v-if="menuOpen"
         class="absolute left-0 top-8 z-50 w-[290px] rounded-[9px] border border-line/70 bg-elevated/95 p-1 shadow-pop backdrop-blur-xl animate-fade-in"
+        data-tauri-drag-region="false"
       >
         <p class="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted/80">
           远程会话
