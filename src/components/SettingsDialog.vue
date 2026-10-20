@@ -5,6 +5,7 @@ import Icon from "./Icon.vue";
 import Toggle from "./Toggle.vue";
 import { state, toast, updateConfig } from "../stores/workspace";
 import { rpc } from "../lib/ipc";
+import { revealLabel } from "../lib/platform";
 
 const config = computed(() => state.config);
 
@@ -261,7 +262,7 @@ async function revealConfig() {
             <span class="flex-1 truncate font-mono text-[10.5px] text-muted">
               {{ state.paths?.configDir ?? state.configDir }}
             </span>
-            <button class="btn h-6 text-[11px]" @click="revealConfig">在 Finder 中显示</button>
+            <button class="btn h-6 text-[11px]" @click="revealConfig">{{ revealLabel }}</button>
           </div>
           <ul class="space-y-0.5 font-mono text-[10px] text-muted/80">
             <li>config.yaml · 外观 / 传输 / SSH 参数</li>

@@ -10,14 +10,15 @@ import SettingsDialog from "./components/SettingsDialog.vue";
 import SimpleDialogs from "./components/SimpleDialogs.vue";
 import ToastStack from "./components/ToastStack.vue";
 import Icon from "./components/Icon.vue";
+import { defaultConfigDir } from "./lib/platform";
 import {
   boot,
   createFolder,
   deleteSelection,
   goBack,
   goForward,
+  goRoot,
   goUp,
-  navigate,
   openEntry,
   pane,
   refreshAll,
@@ -152,7 +153,7 @@ function onKeydown(event: KeyboardEvent) {
     void refreshAll();
   } else if (event.key === "Home") {
     event.preventDefault();
-    void navigate(key, "/");
+    void goRoot(key);
   }
 }
 
@@ -200,7 +201,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
       <div class="mt-4 rounded-[7px] bg-ink/[0.04] px-3 py-2 text-[10.5px] leading-[1.6] text-muted">
         请确认 <code class="font-mono">src-tauri/binaries/file-jd-*</code> 存在（运行
         <code class="font-mono">pnpm backend:build</code>），或查看日志
-        <span class="break-all font-mono">{{ state.configDir || "~/Library/Application Support/file-j" }}/logs/backend.log</span>
+        <span class="break-all font-mono">{{ state.configDir || defaultConfigDir }}/logs/backend.log</span>
       </div>
       <div class="mt-4 flex justify-end gap-2">
         <button class="btn" @click="refreshAll()">重试连接</button>

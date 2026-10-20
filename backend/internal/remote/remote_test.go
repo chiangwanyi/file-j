@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -85,8 +86,10 @@ func TestConnectAndBrowse(t *testing.T) {
 	if len(res.Entries) != 2 {
 		t.Fatalf("entries = %d, want 2 (%+v)", len(res.Entries), res.Entries)
 	}
-	if res.Parent != filepath.Dir(root) {
-		t.Errorf("parent = %q", res.Parent)
+	// Remote paths are POSIX on the wire even when the test server runs on
+	// Windows, so the expectation is the POSIX parent of the normalised root.
+	if want := path.Dir(toPosixPath(root)); res.Parent != want {
+		t.Errorf("parent = %q, want %q", res.Parent, want)
 	}
 
 	file, err := conn.Stat(ctx, filepath.Join(root, "hello.txt"))

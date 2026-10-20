@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -294,6 +295,9 @@ func (m *Manager) dial(ctx context.Context, sess config.Session, password string
 	if err != nil || home == "" {
 		home = "."
 	}
+	// A Windows-hosted server reports a native path here; keep everything in
+	// the POSIX wire form the rest of the package speaks (no-op on POSIX).
+	home = toPosixPath(home)
 
 	conn := &Conn{Session: sess, SSH: client, SFTP: sc, home: home, openedAt: time.Now()}
 	conn.Touch()
@@ -350,13 +354,10 @@ func (m *Manager) authMethods(sess config.Session, password string, cfg config.C
 		}
 		auths = append(auths, ssh.PublicKeys(signer))
 	case "agent":
-		sock := os.Getenv("SSH_AUTH_SOCK")
-		if sock == "" {
-			return nil, nil, errors.New("SSH_AUTH_SOCK 未设置，无法使用 ssh-agent")
-		}
-		conn, err := net.Dial("unix", sock)
+		// Platform adapter: unix socket on macOS/Linux, named pipe on Windows.
+		conn, err := dialAgent()
 		if err != nil {
-			return nil, nil, fmt.Errorf("连接 ssh-agent 失败: %w", err)
+			return nil, nil, err
 		}
 		ag := agent.NewClient(conn)
 		auths = append(auths, ssh.PublicKeysCallback(ag.Signers))
@@ -379,13 +380,13 @@ func (m *Manager) authMethods(sess config.Session, password string, cfg config.C
 }
 
 func expandHome(p string) string {
-	if p == "~" || len(p) > 1 && p[:2] == "~/" {
+	if p == "~" || (len(p) > 1 && (p[:2] == "~/" || p[:2] == `~\`)) {
 		home, err := os.UserHomeDir()
 		if err == nil {
 			if p == "~" {
 				return home
 			}
-			return home + p[1:]
+			return filepath.Join(home, p[2:])
 		}
 	}
 	return p

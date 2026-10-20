@@ -21,6 +21,7 @@ import type {
   UIState,
 } from "../lib/types";
 import { isInside, joinPath } from "../lib/format";
+import { fileManagerName } from "../lib/platform";
 
 // ------------------------------------------------------------------ defaults
 
@@ -57,6 +58,9 @@ function emptyPane(side: Side): Pane {
   return {
     side,
     sessionId: null,
+    // The starting path is replaced by ui.state (which persists the last
+    // location) or fs.home right after boot; "/" is only a placeholder and is
+    // always a valid POSIX root, including for a Windows SFTP session.
     path: side === "local" ? "/" : ".",
     parent: "/",
     entries: [],
@@ -376,6 +380,35 @@ export function navigate(key: PaneKey, path: string): Promise<void> {
 export function goUp(key: PaneKey): Promise<void> {
   const target = pane(key);
   return loadPane(key, target.parent || "/", { push: true });
+}
+
+/**
+ * Jumps to the top of the pane's tree.
+ *
+ * The root is asked from the backend instead of being hard-coded: "/" is the
+ * answer for macOS local disk and for every SFTP session, while a Windows local
+ * pane returns its volume root ("C:\"). Remote panes never need the round trip
+ * and are known to be POSIX.
+ */
+export async function goRoot(key: PaneKey): Promise<void> {
+  const target = pane(key);
+  if (target.side === "remote") {
+    // SFTP paths are POSIX on every server, so there is nothing to ask for.
+    if (!target.sessionId) return;
+    await loadPane(key, "/", { push: true });
+    return;
+  }
+  try {
+    const result = await rpc.request<{ path: string }>("fs.root", {
+      side: "local",
+      sessionId: "",
+      path: target.path,
+    });
+    await loadPane(key, result.path, { push: true });
+  } catch {
+    // Older backend without the RPC: "/" is still correct on macOS.
+    await loadPane(key, "/", { push: true });
+  }
 }
 
 export function goBack(key: PaneKey): Promise<void> {
@@ -824,7 +857,7 @@ export async function revealEntry(entry: FsEntry): Promise<void> {
   try {
     await rpc.request("fs.reveal", { path: entry.path });
   } catch (error) {
-    toast("error", "无法在 Finder 中显示", errorText(error));
+    toast("error", `无法在 ${fileManagerName} 中显示`, errorText(error));
   }
 }
 

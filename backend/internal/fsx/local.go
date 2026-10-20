@@ -2,22 +2,19 @@ package fsx
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
-
-	"golang.org/x/sys/unix"
 )
 
-// Local is the Provider for the Mac's own file system. It intentionally uses the
-// standard library only - there is nothing an external library would buy us for
-// local disk access.
+// Local is the Provider for this machine's own file system. It intentionally
+// uses the standard library plus the small platform adapter in os_unix.go /
+// os_windows.go - there is nothing an external library would buy us for local
+// disk access.
 type Local struct {
 	home string
 }
@@ -34,7 +31,11 @@ func NewLocal() (*Local, error) {
 // Home implements Provider.
 func (l *Local) Home(context.Context) (string, error) { return l.home, nil }
 
-// Resolve turns "~", "~/x" and relative input into an absolute cleaned path.
+// Root implements Provider.
+func (l *Local) Root(p string) string { return RootPath(p) }
+
+// Resolve turns "~", "~/x" (and "~\x" on Windows) and relative input into an
+// absolute cleaned path.
 func (l *Local) Resolve(p string) string {
 	p = strings.TrimSpace(p)
 	if p == "" {
@@ -43,7 +44,9 @@ func (l *Local) Resolve(p string) string {
 	if p == "~" {
 		return l.home
 	}
-	if strings.HasPrefix(p, "~/") {
+	// Both separators are accepted on Windows; on POSIX only "~/" exists and
+	// the second condition is compiled to the same check.
+	if strings.HasPrefix(p, "~/") || (filepath.Separator != '/' && strings.HasPrefix(p, "~\\")) {
 		p = filepath.Join(l.home, p[2:])
 	}
 	if !filepath.IsAbs(p) {
@@ -72,12 +75,14 @@ func (l *Local) Stat(_ context.Context, p string) (Entry, error) {
 			info = fi
 		}
 	}
+	hidden, readOnly := platformEntryFlags(filepath.Base(p), li)
 	return Entry{
 		Name:       filepath.Base(p),
 		Path:       p,
 		IsDir:      info.IsDir(),
 		IsSymlink:  isLink,
-		IsHidden:   IsHiddenName(filepath.Base(p)),
+		IsHidden:   hidden,
+		ReadOnly:   readOnly,
 		Size:       sizeOf(info),
 		ModTime:    info.ModTime(),
 		Mode:       ModeString(info.Mode(), info.IsDir()),
@@ -96,20 +101,22 @@ func (l *Local) List(_ context.Context, p string, showHidden bool) (*ListResult,
 	res := &ListResult{Path: p, Parent: Parent(p), Entries: make([]Entry, 0, len(items))}
 	for _, it := range items {
 		name := it.Name()
-		if !showHidden && IsHiddenName(name) {
-			continue
-		}
-		full := filepath.Join(p, name)
 		info, err := it.Info()
 		if err != nil {
 			// A file racing with the listing is not worth failing the whole call.
 			continue
 		}
+		hidden, readOnly := platformEntryFlags(name, info)
+		if !showHidden && hidden {
+			continue
+		}
+		full := filepath.Join(p, name)
 		entry := Entry{
 			Name:     name,
 			Path:     full,
 			IsDir:    info.IsDir(),
-			IsHidden: IsHiddenName(name),
+			IsHidden: hidden,
+			ReadOnly: readOnly,
 			Size:     sizeOf(info),
 			ModTime:  info.ModTime(),
 			Mode:     ModeString(info.Mode(), info.IsDir()),
@@ -130,10 +137,7 @@ func (l *Local) List(_ context.Context, p string, showHidden bool) (*ListResult,
 		}
 		res.Entries = append(res.Entries, entry)
 	}
-	var st unix.Statfs_t
-	if err := unix.Statfs(p, &st); err == nil {
-		free := uint64(st.Bavail) * uint64(st.Bsize)
-		total := uint64(st.Blocks) * uint64(st.Bsize)
+	if free, total, ok := diskUsage(p); ok {
 		res.FreeBytes = &free
 		res.TotalBytes = &total
 	}
@@ -181,42 +185,13 @@ func (l *Local) Chtimes(_ context.Context, p string, atime, mtime time.Time) err
 	return os.Chtimes(l.Resolve(p), atime, mtime)
 }
 
-// Trash moves a path into ~/.Trash, matching Finder semantics. The bool result
-// reports whether the item actually landed in the Trash; false means the volume
-// did not allow a move and the caller must fall back to a permanent delete.
-func (l *Local) Trash(p string) (bool, error) {
-	p = l.Resolve(p)
-	if p == "/" || p == l.home {
-		return false, errors.New("拒绝删除该路径")
-	}
-	trash := filepath.Join(l.home, ".Trash")
-	if err := os.MkdirAll(trash, 0o700); err != nil {
-		return false, err
-	}
-	target := filepath.Join(trash, filepath.Base(p))
-	if _, err := os.Lstat(target); err == nil {
-		base := filepath.Base(p)
-		ext := filepath.Ext(base)
-		stem := strings.TrimSuffix(base, ext)
-		for i := 2; i < 1000; i++ {
-			candidate := filepath.Join(trash, stem+" "+strconv.Itoa(i)+ext)
-			if _, err := os.Lstat(candidate); errors.Is(err, os.ErrNotExist) {
-				target = candidate
-				break
-			}
-		}
-	}
-	if err := os.Rename(p, target); err != nil {
-		if errors.Is(err, unix.EXDEV) {
-			// Different volume: no Trash available there.
-			return false, nil
-		}
-		return false, err
-	}
-	return true, nil
-}
+// Trash moves a path into the platform's trash (macOS: ~/.Trash, Windows: the
+// Recycle Bin). The bool result reports whether the item actually landed in the
+// trash; false means the volume did not allow a move and the caller must fall
+// back to a permanent delete. The implementation lives in trash_unix.go /
+// trash_windows.go.
 
-// Subdirectories is a small helper used by the sidebar to suggest roots.
+// QuickPlaces is a small helper used by the sidebar to suggest roots.
 func (l *Local) QuickPlaces() []map[string]string {
 	places := []map[string]string{
 		{"name": "主目录", "path": l.home},
@@ -224,13 +199,13 @@ func (l *Local) QuickPlaces() []map[string]string {
 		{"name": "文稿", "path": filepath.Join(l.home, "Documents")},
 		{"name": "下载", "path": filepath.Join(l.home, "Downloads")},
 	}
-	out := make([]map[string]string, 0, len(places))
+	out := make([]map[string]string, 0, len(places)+1)
 	for _, p := range places {
 		if st, err := os.Stat(p["path"]); err == nil && st.IsDir() {
 			out = append(out, p)
 		}
 	}
-	out = append(out, map[string]string{"name": "根目录", "path": "/"})
+	out = append(out, quickRoots()...)
 	return out
 }
 

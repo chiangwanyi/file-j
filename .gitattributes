@@ -1,0 +1,24 @@
+# Normalise line endings in the repository so a Windows checkout and a macOS
+# checkout produce identical bytes.
+#
+# Default: check out LF everywhere, commit LF everywhere. That keeps shell
+# scripts and Go/Rust source byte-identical across platforms and avoids
+# "the whole file shows as modified" after switching machines.
+
+* text=auto eol=lf
+
+# Files Windows tooling must receive with CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary assets.
+*.png binary
+*.jpg binary
+*.ico binary
+*.icns binary
+*.exe binary
+*.dmg binary
+
+# The compiled sidecar is a build product, never committed.
+src-tauri/binaries/* binary

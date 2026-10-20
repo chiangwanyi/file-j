@@ -4,6 +4,7 @@ import FileTable from "./FileTable.vue";
 import Icon from "./Icon.vue";
 import ContextMenu from "./ContextMenu.vue";
 import type { MenuAction } from "../lib/menu";
+import { modKeyLabel } from "../lib/platform";
 import {
   canGoBack,
   canGoForward,
@@ -92,7 +93,7 @@ const menuItems = computed<MenuAction[]>(() => {
     {
       label: "刷新",
       icon: "refresh",
-      hint: "⌘R",
+      hint: `${modKeyLabel}R`,
       action: () => void refreshPane(props.paneKey),
     },
     {

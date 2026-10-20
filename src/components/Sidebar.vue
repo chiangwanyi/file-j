@@ -20,6 +20,13 @@ const placeIcon: Record<string, string> = {
   根目录: "hard-drive",
 };
 
+// macOS contributes a single "根目录" entry; Windows contributes one entry per
+// mounted drive ("C:\", "D:\"), so those fall back to the drive glyph instead
+// of the generic folder one.
+function iconFor(place: { name: string; path: string }): string {
+  return placeIcon[place.name] ?? (/^[A-Za-z]:\\?$/.test(place.path) ? "hard-drive" : "folder");
+}
+
 const colorDot: Record<string, string> = {
   blue: "bg-[#3b99f7]",
   green: "bg-[#31b56f]",
@@ -77,7 +84,7 @@ function revealConfig() {
         "
         @click="openPlace(place.path)"
       >
-        <Icon :name="placeIcon[place.name] ?? 'folder'" :size="13" :class="localPath === place.path ? 'text-accent' : 'text-muted'" />
+        <Icon :name="iconFor(place)" :size="13" :class="localPath === place.path ? 'text-accent' : 'text-muted'" />
         <span class="truncate">{{ place.name }}</span>
       </button>
 

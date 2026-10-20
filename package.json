@@ -8,7 +8,7 @@
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "backend:build": "bash scripts/build-backend.sh",
+    "backend:build": "node scripts/build-backend.mjs",
     "backend:run": "cd backend && go run ./cmd/file-jd --addr 127.0.0.1:47121 --token dev --config-dir ./.devconfig",
     "backend:test": "cd backend && go test ./...",
     "web:dev": "vite"

@@ -52,30 +52,55 @@ export function formatDate(iso: string | undefined, mode: "iso" | "localized"): 
   return `${date.getMonth() + 1}月${date.getDate()}日 ${time}`;
 }
 
+/**
+ * True when a path uses the Windows dialect ("C:\dir", "\\server\share").
+ *
+ * The store holds both kinds at once: local paths are whatever the host OS
+ * uses, while SFTP paths are always POSIX. Remote panes therefore keep the
+ * exact same helpers as before — a POSIX path never matches the tests below.
+ * Mirrors fsx.isWindowsStyle in backend/internal/fsx/paths_windows.go.
+ */
+function isWindowsPath(path: string): boolean {
+  return /^[a-zA-Z]:/.test(path) || path.startsWith("\\\\");
+}
+
+function sepOf(path: string): string {
+  return isWindowsPath(path) ? "\\" : "/";
+}
+
 export function basename(path: string | undefined): string {
   if (!path) return "";
-  const clean = path.replace(/\/+$/, "");
-  if (clean === "" || clean === "/") return "/";
-  const index = clean.lastIndexOf("/");
+  const clean = path.replace(/[\\/]+$/, "");
+  if (clean === "") return isWindowsPath(path) ? "" : "/";
+  const index = Math.max(clean.lastIndexOf("/"), clean.lastIndexOf("\\"));
   return index === -1 ? clean : clean.slice(index + 1);
 }
 
 export function dirname(path: string): string {
-  const clean = path.replace(/\/+$/, "");
-  if (clean === "" || clean === "/") return "/";
-  const index = clean.lastIndexOf("/");
-  if (index <= 0) return "/";
-  return clean.slice(0, index);
+  const clean = path.replace(/[\\/]+$/, "");
+  const index = Math.max(clean.lastIndexOf("/"), clean.lastIndexOf("\\"));
+  if (index <= 0) return isWindowsPath(path) ? "" : "/";
+  // Keep the separator when the parent is a volume root ("C:\dir" -> "C:\").
+  return index === 2 && isWindowsPath(path) ? clean.slice(0, index + 1) : clean.slice(0, index);
 }
 
 export function joinPath(base: string, name: string): string {
-  if (!base || base === "/") return `/${name}`;
-  return `${base.replace(/\/+$/, "")}/${name}`;
+  const sep = sepOf(base);
+  if (!base) return `${sep}${name}`;
+  const trimmed = base.replace(/[\\/]+$/, "");
+  if (isWindowsPath(base) && /^[a-zA-Z]:$/.test(trimmed)) return `${trimmed}${sep}${name}`;
+  return `${trimmed}${sep}${name}`;
 }
 
 export function isInside(parent: string, child: string): boolean {
-  const p = parent.replace(/\/+$/, "");
-  return child === p || child.startsWith(`${p}/`);
+  const sep = sepOf(parent);
+  const trimmed = parent.replace(/[\\/]+$/, "");
+  if (!trimmed) return true; // root of whatever dialect: everything is inside
+  if (child === trimmed) return true;
+  // Compare case-insensitively on Windows, where the FS is case-insensitive.
+  const a = isWindowsPath(parent) ? child.toLowerCase() : child;
+  const b = isWindowsPath(parent) ? trimmed.toLowerCase() : trimmed;
+  return a.startsWith(`${b}${sep}`);
 }
 
 export function extensionOf(name: string): string {

@@ -8,7 +8,6 @@ import (
 	"context"
 	"io"
 	"io/fs"
-	"path"
 	"strings"
 	"time"
 )
@@ -41,7 +40,8 @@ type ListResult struct {
 }
 
 // Provider is the minimal surface required to browse and transfer files.
-// Implementations: local.go (the Mac's own disk) and remote (an SFTP session).
+// Implementations: local.go (this machine's own disk) and remote (an SFTP
+// session).
 type Provider interface {
 	// Stat returns metadata about a single path. Symlinks are followed.
 	Stat(ctx context.Context, p string) (Entry, error)
@@ -63,48 +63,20 @@ type Provider interface {
 	Chtimes(ctx context.Context, p string, atime, mtime time.Time) error
 	// Home returns the default starting directory.
 	Home(ctx context.Context) (string, error)
+	// Root returns the top of the tree a path lives in: "/" for POSIX (local
+	// disk and every SFTP session) and the volume root ("C:\") for a Windows
+	// local path. The front-end asks for it instead of hard-coding "/", which
+	// is not a root on Windows.
+	Root(p string) string
 }
 
-// Clean normalises a POSIX style path. Both macOS and SFTP use "/", which lets
-// the whole backend share one path implementation.
-func Clean(p string) string {
-	if p == "" {
-		return "/"
-	}
-	return path.Clean(p)
-}
+// Path helpers Clean/Join/Parent/Base live in paths_unix.go and
+// paths_windows.go: on macOS one POSIX implementation covers local and SFTP
+// paths, while Windows must keep the two dialects (drive letters vs "/") apart.
 
-// Join appends a child name to a directory path.
-func Join(base, name string) string {
-	if base == "" {
-		base = "/"
-	}
-	return path.Join(base, name)
-}
-
-// Parent returns the parent directory, clamped at the root.
-func Parent(p string) string {
-	p = Clean(p)
-	if p == "/" {
-		return "/"
-	}
-	parent := path.Dir(p)
-	if parent == "." {
-		return "/"
-	}
-	return parent
-}
-
-// Base returns the final element of a path.
-func Base(p string) string {
-	p = Clean(p)
-	if p == "/" {
-		return "/"
-	}
-	return path.Base(p)
-}
-
-// IsHiddenName reports whether a name should be hidden by dotfile rules.
+// IsHiddenName reports whether a name should be hidden by dotfile rules. The
+// local provider additionally applies the platform's attribute rules through
+// platformEntryFlags; SFTP sessions always use this dotfile rule.
 func IsHiddenName(name string) bool {
 	return strings.HasPrefix(name, ".")
 }

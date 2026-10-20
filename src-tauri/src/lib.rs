@@ -69,20 +69,26 @@ fn backend_info(state: State<'_, BackendState>) -> Result<BackendInfo, String> {
     }
 }
 
-/// Locates the Go sidecar in both `tauri dev` and a bundled .app.
+/// Locates the Go sidecar in both `tauri dev` and a bundled .app / installer.
+///
+/// The binary name carries the platform's executable suffix (`file-jd.exe` on
+/// Windows) because both `Command::new` and Tauri's `externalBin` bundling
+/// expect it there; on macOS it stays plain `file-jd`.
 fn resolve_sidecar(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let exe_name = format!("file-jd{}", std::env::consts::EXE_SUFFIX);
     let mut candidates: Vec<PathBuf> = Vec::new();
 
-    // Bundled app: Contents/MacOS/file-jd sits next to the main executable.
+    // Bundled app: Contents/MacOS/file-jd sits next to the main executable on
+    // macOS, and the NSIS install dir keeps file-jd.exe next to FileJ.exe.
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            candidates.push(dir.join("file-jd"));
+            candidates.push(dir.join(&exe_name));
         }
     }
     // Resource directory (alternative bundling layout).
     if let Ok(dir) = app.path().resource_dir() {
-        candidates.push(dir.join("file-jd"));
-        candidates.push(dir.join("binaries").join("file-jd"));
+        candidates.push(dir.join(&exe_name));
+        candidates.push(dir.join("binaries").join(&exe_name));
     }
     // Development: src-tauri/binaries/file-jd-<target-triple>.
     if cfg!(debug_assertions) {
@@ -136,6 +142,16 @@ fn spawn_backend(app: &tauri::AppHandle) -> Result<(), String> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+
+    // Windows: file-jd is a console subsystem binary; without this flag every
+    // launch flashes a console window in front of the GUI. macOS has no
+    // equivalent and keeps the default spawn behaviour.
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
 
     let mut child = cmd
         .spawn()

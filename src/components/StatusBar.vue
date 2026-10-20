@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import Icon from "./Icon.vue";
+import { modKeyLabel } from "../lib/platform";
 import { pane, selectedEntries, state } from "../stores/workspace";
 
 const active = computed(() => pane(state.active));
@@ -34,7 +35,7 @@ const running = computed(
       {{ running }} 个任务传输中
     </span>
     <span class="flex-1" />
-    <span class="hidden lg:inline text-muted/70">F5 复制 · F6 移动 · ⌘R 刷新</span>
+    <span class="hidden lg:inline text-muted/70">F5 复制 · F6 移动 · {{ modKeyLabel }}R 刷新</span>
     <span class="text-muted/40">|</span>
     <span class="tabular-nums">file-j {{ state.backendVersion || "0.1.0" }}</span>
   </footer>

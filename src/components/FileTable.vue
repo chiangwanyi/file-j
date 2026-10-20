@@ -5,6 +5,12 @@ import Icon from "./Icon.vue";
 import ContextMenu from "./ContextMenu.vue";
 import type { MenuAction } from "../lib/menu";
 import {
+  deleteKeyLabel,
+  modKeyLabel,
+  revealLabel,
+  shiftKeyLabel,
+} from "../lib/platform";
+import {
   createFolder,
   deleteEntries,
   openEntry,
@@ -110,7 +116,7 @@ const menuItems = computed<MenuAction[]>(() => {
   items.push({
     label: "新建文件夹",
     icon: "folder-plus",
-    hint: "⇧⌘N",
+    hint: `${shiftKeyLabel}${modKeyLabel}N`,
     action: () => createFolder(props.paneKey),
   });
   if (entry) {
@@ -123,7 +129,7 @@ const menuItems = computed<MenuAction[]>(() => {
   items.push({
     label: targets.length > 1 ? `删除 ${targets.length} 项` : "删除",
     icon: "trash",
-    hint: "⌫",
+    hint: deleteKeyLabel,
     danger: true,
     disabled: targets.length === 0,
     action: () => void deleteEntries(props.paneKey, targets),
@@ -132,7 +138,7 @@ const menuItems = computed<MenuAction[]>(() => {
   items.push({ label: "", separator: true });
   if (!isRemote.value && entry) {
     items.push({
-      label: "在 Finder 中显示",
+      label: revealLabel,
       icon: "drive",
       action: () => entry && void revealEntry(entry),
     });
@@ -152,7 +158,7 @@ const menuItems = computed<MenuAction[]>(() => {
   items.push({
     label: "刷新",
     icon: "refresh",
-    hint: "⌘R",
+    hint: `${modKeyLabel}R`,
     action: () => void refreshPane(props.paneKey),
   });
   return items;

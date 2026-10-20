@@ -13,7 +13,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"runtime"
 	"strings"
 	"sync"
@@ -149,6 +148,7 @@ func (a *App) registerHandlers() {
 	h("fs.list", a.handleList)
 	h("fs.stat", a.handleStat)
 	h("fs.home", a.handleHome)
+	h("fs.root", a.handleRoot)
 	h("fs.places", a.handlePlaces)
 	h("fs.mkdir", a.handleMkdir)
 	h("fs.rename", a.handleRename)
@@ -452,6 +452,25 @@ func (a *App) handleHome(ctx context.Context, raw json.RawMessage) (any, error) 
 	return map[string]string{"path": home}, nil
 }
 
+// handleRoot answers "where is the top of this tree?". The front-end used to
+// hard-code "/", which is correct on macOS but resolves to nothing on Windows
+// where the top is a volume root such as "C:\". Remote panes always answer "/"
+// because SFTP paths are POSIX on every server.
+func (a *App) handleRoot(ctx context.Context, raw json.RawMessage) (any, error) {
+	var p struct {
+		providerParams
+		Path string `json:"path"`
+	}
+	if err := decode(raw, &p); err != nil {
+		return nil, err
+	}
+	prov, err := a.provider(ctx, p.Side, p.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]string{"path": prov.Root(p.Path)}, nil
+}
+
 func (a *App) handlePlaces(context.Context, json.RawMessage) (any, error) {
 	return a.local.QuickPlaces(), nil
 }
@@ -574,10 +593,8 @@ func (a *App) handleOpen(_ context.Context, raw json.RawMessage) (any, error) {
 	if err := decode(raw, &p); err != nil {
 		return nil, err
 	}
-	if runtime.GOOS != "darwin" {
-		return nil, protocol.Errorf(protocol.CodeUnsupported, "仅支持 macOS")
-	}
-	if err := exec.Command("open", a.local.Resolve(p.Path)).Start(); err != nil {
+	// Platform adapter: `open(1)` on macOS, ShellExecuteW on Windows.
+	if err := openPath(a.local.Resolve(p.Path)); err != nil {
 		return nil, protocol.Wrapf(protocol.CodeInternal, "无法打开文件", err.Error())
 	}
 	return map[string]bool{"ok": true}, nil
@@ -719,22 +736,17 @@ func validateName(name string) error {
 	if name == "." || name == ".." || strings.ContainsAny(name, "/\x00") {
 		return protocol.Errorf(protocol.CodeBadRequest, "名称包含非法字符")
 	}
+	// Platform adapter: Windows forbids extra characters and device names.
+	if reason := fsx.NameProblem(name); reason != "" {
+		return protocol.Errorf(protocol.CodeBadRequest, reason)
+	}
 	return nil
 }
 
+// reveal shows a local path in the platform's file manager. Implementation in
+// shell_darwin.go / shell_windows.go.
 func reveal(path string) error {
-	if runtime.GOOS != "darwin" {
-		return protocol.Errorf(protocol.CodeUnsupported, "仅支持 macOS")
-	}
-	cmd := exec.Command("open", "-R", path)
-	if err := cmd.Start(); err != nil {
-		// "open -R" fails when the path itself is a folder on some versions;
-		// fall back to opening the folder directly.
-		if err2 := exec.Command("open", path).Start(); err2 != nil {
-			return protocol.Wrapf(protocol.CodeInternal, "无法在 Finder 中显示", err.Error())
-		}
-	}
-	return nil
+	return revealPath(path)
 }
 
 // mapRemoteError turns SSH/SFTP failures into codes the UI can act on.

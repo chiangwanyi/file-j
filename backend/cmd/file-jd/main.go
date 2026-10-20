@@ -30,7 +30,7 @@ var version = "0.1.0-dev"
 
 func main() {
 	var (
-		configDir = flag.String("config-dir", "", "YAML configuration directory (default: ~/Library/Application Support/file-j)")
+		configDir = flag.String("config-dir", "", "YAML configuration directory (default: the per-user config dir + /file-j, e.g. ~/Library/Application Support/file-j on macOS, %APPDATA%\\file-j on Windows)")
 		token     = flag.String("token", "", "shared secret required by the WebSocket handshake")
 		addr      = flag.String("addr", "127.0.0.1:0", "loopback address to bind; port 0 lets the OS choose")
 		logLevel  = flag.String("log-level", "info", "debug | info | warn | error")

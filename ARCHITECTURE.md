@@ -6,7 +6,8 @@
 - 外壳：Tauri 2（Rust）
 - 业务后端：Go 1.26.9
 - 持久化：纯 YAML 文件，无数据库
-- 目标系统：macOS 12.0+（本机验证于 macOS 12.7.6 / Intel）
+- 目标系统：macOS 12.0+（验证于 macOS 12.7.6 / Intel）与 Windows 11 x64
+- 平台差异一律通过 `//go:build` / `#[cfg]` / 前端 `platform.ts` 适配层隔离，业务代码不含平台分支
 
 ---
 
@@ -62,11 +63,11 @@
 | `cmd/file-jd` | 进程入口 | 解析参数、初始化日志、绑定端口、**向 stdout 打印唯一一行握手**、信号与父进程退出处理 |
 | `internal/ipc` | WebSocket 服务与路由 | token 校验、Origin 校验、每请求一个 goroutine、写串行化、panic 兜底、事件广播 |
 | `internal/app` | 组装与 RPC 处理器 | 唯一的“知道所有模块”的地方；路径归一化、参数校验、错误码映射 |
-| `internal/fsx` | 文件系统抽象 + 本地实现 | `Provider` 接口；`Local` 基于 `os`；路径、`ls -l` 风格权限串、`~` 展开、废纸篓 |
+| `internal/fsx` | 文件系统抽象 + 本地实现 | `Provider` 接口；`Local` 基于 `os`；路径、`ls -l` 风格权限串、`~` 展开、废纸篓。平台差异拆到 `paths_*.go` / `os_*.go` / `trash_*.go` |
 | `internal/remote` | SSH/SFTP | `x/crypto/ssh` + `pkg/sftp`；连接复用、keepalive、空闲回收、主机密钥策略；`Conn` 实现 `fsx.Provider` |
 | `internal/transfer` | 传输引擎 | 队列、并发、递归、进度节流、取消、冲突策略、移动快路径 |
 | `internal/config` | YAML 持久化 | 四个文档、原子写、默认值、范围收敛、手改容错 |
-| `internal/credentials` | 密钥存储 | macOS Keychain（`security` CLI），YAML 只存引用；失败降级为内存 |
+| `internal/credentials` | 密钥存储 | macOS Keychain（`security` CLI）/ Windows 凭据管理器（Win32 `CredWriteW`），YAML 只存引用；失败降级为内存 |
 | `internal/testutil` | 测试用 SSH/SFTP 服务器 | 仅被 `_test.go` 引用，不进产物 |
 
 ### 2.3 第三方库选型
@@ -79,8 +80,8 @@
 | SFTP 协议 | `github.com/pkg/sftp` v1.13 | Go 生态事实标准；并发读写、`PosixRename`、`StatVFS`、超时控制齐全 |
 | WebSocket | `github.com/gorilla/websocket` | 最成熟稳定，握手/读写/关闭语义清晰 |
 | YAML | `gopkg.in/yaml.v3` | 标准选择，注释与结构体映射稳定 |
-| 系统调用 | `golang.org/x/sys/unix` | `statfs` 取磁盘容量，避免 cgo |
-| 前端构建 | Vite 8 + Vue 3.5 + Tailwind 3.4 | 见第 6 节 macOS 12 约束 |
+| 系统调用 | `golang.org/x/sys/{unix,windows}` | `statfs` / `GetDiskFreeSpaceExW` 取磁盘容量，避免 cgo |
+| 前端构建 | Vite 8 + Vue 3.5 + Tailwind 3.4 | 见第 6 节平台约束 |
 
 **没有**自己写 SSH 报文、SFTP 分包、YAML 解析、WebSocket 帧、文件拷贝重试框架。
 
@@ -213,7 +214,7 @@ sessions:
     lastUsedAt: 2026-10-19T22:00:00Z
 ```
 
-**密码不落盘。** `password` 只在 `session.save` 请求中出现一次，写入 macOS 钥匙串（`security add-generic-password -s com.jiangwanyi.filej`），YAML 仅保存 `credentialRef`。钥匙串不可用时退化为“仅本次运行有效”，并在 UI 明确提示。
+**密码不落盘。** `password` 只在 `session.save` 请求中出现一次，写入系统凭据存储（macOS 钥匙串 `security add-generic-password -s com.jiangwanyi.filej`；Windows 凭据管理器 `CredWriteW`，目标名 `FileJ/<account>`），YAML 仅保存 `credentialRef`。凭据存储不可用时退化为“仅本次运行有效”，并在 UI 明确提示。
 
 ### 4.4 `ui-state.yaml`
 
@@ -327,9 +328,62 @@ transfer.create(items, op, conflict)
 
 ---
 
-## 6. macOS 12 兼容性
+## 6. 平台适配
 
-macOS 12 Monterey 的 WKWebView 对应 Safari 15.x，这是整套技术选型的硬约束：
+平台差异集中在三层，**业务代码里没有一处 `runtime.GOOS` 分支**：
+
+| 层 | 机制 | 位置 |
+| --- | --- | --- |
+| Go | `//go:build windows` / `!windows` 成对文件 | `internal/fsx/{paths,os,trash}_*.go`、`internal/credentials/secret_*.go`、`internal/remote/agent_*.go`、`internal/app/shell_*.go` |
+| Rust | `#[cfg(target_os = ...)]` + Tauri 平台配置 | `src-tauri/src/lib.rs`、`src-tauri/Cargo.toml`、`tauri.windows.conf.json` |
+| 前端 | 单一模块导出常量 | `src/lib/platform.ts`（键位标签、系统名、是否自绘窗口按钮） |
+
+### 6.1 路径：两种方言共存
+
+这是最容易出错的一处。后端同时处理**本地路径**（跟随宿主系统）与 **SFTP 路径**（永远是 POSIX），而传输引擎对两者调用同一组助手函数。
+
+- `paths_unix.go`：macOS 上本地与远程都是 `/`，一份 `path.Clean/Join/Parent/Base` 即可，行为与改造前完全一致。
+- `paths_windows.go`：**按输入本身判断方言**——带盘符或 `\\` 前缀即 Windows 风格，其余按 POSIX 处理。于是 `C:/Users` 用 `filepath` 语义、`/srv/www` 保持 POSIX 语义，两者不会在同一次调用里混用。
+- 前端 `format.ts` 的 `basename/dirname/joinPath/isInside` 采用同一套判定（Windows 下比较忽略大小写）。
+- 「回到根目录」不硬编码 `/`：新增 `fs.root` RPC，macOS 与 SFTP 返回 `/`，Windows 本地返回卷根 `C://`。
+
+### 6.2 系统能力对照
+
+| 能力 | macOS | Windows 11 |
+| --- | --- | --- |
+| 打开文件 | `open <path>` | `ShellExecuteW` verb=open |
+| 在文件管理器中显示 | `open -R <path>` | `explorer /select,<path>` |
+| 删除到废纸篓 | 移入 `~/.Trash`，重名自动加序号 | `SHFileOperationW` + `FOF_ALLOWUNDO`（等同资源管理器的删除） |
+| 磁盘容量 | `unix.Statfs` | `GetDiskFreeSpaceExW` |
+| 隐藏文件 | `.` 开头 | `.` 开头 **或** `FILE_ATTRIBUTE_HIDDEN` |
+| 只读标记 | 由权限串体现 | 显式读 `FILE_ATTRIBUTE_READONLY` |
+| 文件名合法性 | 仅禁 `/` 与 NUL | 另禁 `\ < > : " | ? *`、控制字符、结尾空格/点、CON/PRN/AUX/NUL/COM1-9/LPT1-9 |
+| 密钥存储 | Keychain（`security` CLI） | 凭据管理器（`CredReadW`/`CredWriteW`/`CredFree`） |
+| ssh-agent | `SSH_AUTH_SOCK` unix socket | `SSH_AUTH_SOCK` 命名管道（OpenSSH for Windows） |
+| 侧边栏根位置 | 单个「根目录」`/` | 枚举已挂载的盘符 |
+| 配置目录 | `os.UserConfigDir()` → `~/Library/Application Support/file-j` | 同函数 → `%APPDATA%\file-j` |
+
+跨卷移动在两个平台都要回退到「复制 + 删除」：macOS 判 `unix.EXDEV`，Windows 判 `ERROR_NOT_SAME_DEVICE`。
+
+### 6.3 窗口外壳
+
+| | macOS | Windows 11 |
+| --- | --- | --- |
+| 窗口配置 | `tauri.conf.json`：`titleBarStyle: Overlay` | `tauri.windows.conf.json`：`decorations: false` + `shadow: true`（保留投影与 Win11 圆角） |
+| 窗口按钮 | AppKit 原生红绿灯，由 `center_traffic_lights`（`#[cfg(target_os="macos")]`）垂直居中到 52px 中线 | 前端 `Toolbar.vue` 自绘最小化/最大化/关闭，SVG 图元 |
+| 顶栏左侧留白 | `pl-[80px]` 给红绿灯 | `pl-3`，不留白 |
+| 双击标题栏 | 系统行为（缩放） | 显式 `toggleMaximize()` |
+| 打包目标 | `app` + `dmg`，`minimumSystemVersion 12.0` | `nsis` + `msi` |
+
+顶栏高度 52px 是跨平台契约：macOS 侧是 `Toolbar.vue` 的 `h-[52px]` ↔ `lib.rs` 的 `TITLE_BAR_HEIGHT`，Windows 侧靠 `items-center` 让自绘按钮落在同一条中线上。
+
+`titleBarStyle` 在 Tauri 里是 `#[cfg(target_os = "macos")]` 的字段，非 macOS 平台被完全忽略，所以 Windows 配置里不写它。无边框窗口的缩放由 tao 通过 `WM_NCHITTEST` 逐边处理，边缘 4px 内拖动仍可调整大小。
+
+窗口按钮走 Tauri IPC，因此 `capabilities/default.json` 需要 `core:window:allow-minimize` / `allow-toggle-maximize` / `allow-is-maximized` / `allow-close`；`allow-start-dragging` 与 `allow-internal-toggle-maximize` 是拖拽区（含双击最大化）所需。
+
+sidecar 以 `file-jd.exe`（Windows）/ `file-jd`（macOS）命名并由 `std::env::consts::EXE_SUFFIX` 拼出；Windows 上 spawn 时带 `CREATE_NO_WINDOW`，避免每次启动闪一个控制台窗口。
+
+### 6.4 依赖与工具链
 
 | 决策 | 原因 |
 | --- | --- |
@@ -338,9 +392,11 @@ macOS 12 Monterey 的 WKWebView 对应 Safari 15.x，这是整套技术选型的
 | `bundle.macOS.minimumSystemVersion = "12.0"` | 明确产物最低系统版本 |
 | 不用 `structuredClone`、`:has()` 等新 API | 避免运行时不可用；已改用 JSON 深拷贝与类名控制 |
 | 前端不依赖 Node/系统命令 | 所有系统能力都经 Go 后端 |
-| Go 静态编译（`CGO_ENABLED=0`） | 无外部动态库依赖，Intel/Apple Silicon 均可构建 |
+| Go 静态编译（`CGO_ENABLED=0`） | 无外部动态库依赖，Intel/Apple Silicon 与 Windows 均可构建 |
+| `scripts/build-backend.mjs` 而非 `.sh` | Windows 上不保证有 bash；`pnpm backend:build` 两个平台同一条命令 |
+| `.gitattributes` 统一 LF | 避免在 Windows 上 checkout 后整文件显示为已修改；仅 `*.bat/*.cmd/*.ps1` 例外用 CRLF |
+| 前端 `vite build` / `vue-tsc` 只做类型与产物校验 | 不依赖 shell，Windows 上可直接执行 |
 
-前端样式仅使用 CSS 变量 + flex/grid + `backdrop-filter`（Safari 15 支持），未使用容器查询等新特性。
 
 ---
 
@@ -358,7 +414,7 @@ pnpm dev            # http://localhost:1420
 # 2) 完整桌面应用
 pnpm tauri dev      # 自动构建 sidecar 并启动窗口
 
-# 3) 打包 .app / .dmg
+# 3) 打包（macOS: .app / .dmg；Windows: NSIS / .msi）
 pnpm tauri build
 
 # 4) 本地演示用 SFTP 服务器（可选）
@@ -369,8 +425,9 @@ pnpm backend:test   # Go 单元 + 集成测试（含内置 SSH/SFTP 端到端）
 pnpm build          # vue-tsc + vite build
 ```
 
-`pnpm backend:build` 会按 `rustc` 的 host triple 生成
-`src-tauri/binaries/file-jd-<triple>`，这是 Tauri `externalBin` 要求的命名。
+`pnpm backend:build`（等价 `node scripts/build-backend.mjs`）按 `rustc` 的 host triple 生成
+`src-tauri/binaries/file-jd-<triple>`，Windows 上带 `.exe` 后缀 —— 这是 Tauri `externalBin` 要求的命名。
+脚本内用 `rustc -vV` 取 triple，取不到时退回 `go env GOOS/GOARCH`，因此没有 Rust 也能先验证 Go 侧构建。
 
 ---
 
@@ -382,6 +439,7 @@ pnpm build          # vue-tsc + vite build
 | `remote` | 进程内真实 SSH+SFTP 服务器：认证、浏览、读写、重命名、递归删除、TOFU 记录、密钥变更阻断、错误密码 |
 | `transfer` | 本地复制/递归/移动、四种冲突策略、SFTP 上传下载、递归下载、排队取消、远程到远程拒绝 |
 | 前端 | `vue-tsc` 严格类型检查；构建产物按 Safari 15 目标编译 |
+| `fsx` | 路径方言判定、Join/Parent/Base 的双语义、`RootPath` 落在真实目录、平台文件名规则 |
 | 界面 | 通过 Chrome DevTools Protocol 真实点击、按 F5、切换主题并截图验证 |
 
 测试用 SSH 服务器在进程内启动（`internal/testutil`），因此 CI 无需外部依赖，也不触碰真实主机。
@@ -397,8 +455,8 @@ backend/
 └── internal/
     ├── app/                # RPC 处理器与装配
     ├── config/             # YAML 模型与存储
-    ├── credentials/        # Keychain
-    ├── fsx/                # Provider 抽象 + 本地实现
+    ├── credentials/        # Keychain / 凭据管理器
+    ├── fsx/                # Provider 抽象 + 本地实现（含平台适配文件）
     ├── ipc/                # WebSocket 服务
     ├── protocol/           # 报文与错误码
     ├── remote/             # SSH/SFTP
@@ -406,8 +464,12 @@ backend/
     └── testutil/           # 测试服务器
 src/
 ├── lib/                    # 协议类型、WS 客户端、格式化、菜单类型
+│   ├── platform.ts         # 平台常量：键位标签 / 系统名 / 是否自绘窗口按钮
+│   └── window.ts           # 窗口控制（仅 Windows 需要）
 ├── stores/workspace.ts     # 单一响应式状态 + 全部动作
 └── components/             # Toolbar / Sidebar / Pane / FileTable / TransferPanel / 对话框
 src-tauri/                  # Tauri 壳层（仅框架职责）
-scripts/build-backend.sh    # sidecar 构建
+scripts/
+├── build-backend.mjs        # sidecar 构建（跨平台，pnpm backend:build 实际执行）
+└── build-backend.sh         # 同上，保留给习惯直接调用的场景
 ```

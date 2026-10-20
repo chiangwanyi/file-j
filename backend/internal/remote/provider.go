@@ -19,9 +19,11 @@ import (
 // exactly like a local folder.
 var _ fsx.Provider = (*Conn)(nil)
 
-// Resolve turns "." or "" into the session's home directory.
+// Resolve turns "." or "" into the session's home directory. Windows-style
+// paths (from a Windows-hosted server or from tests) are normalised to the
+// POSIX wire form first; POSIX paths are unaffected.
 func (c *Conn) Resolve(p string) string {
-	p = strings.TrimSpace(p)
+	p = toPosixPath(strings.TrimSpace(p))
 	if p == "" || p == "." {
 		return c.home
 	}
@@ -33,6 +35,11 @@ func (c *Conn) Resolve(p string) string {
 
 // Home implements fsx.Provider.
 func (c *Conn) Home(context.Context) (string, error) { return c.home, nil }
+
+// Root implements fsx.Provider. An SFTP server always speaks POSIX paths, so the
+// root is "/" even when the backend itself runs on Windows (see path.go, which
+// translates the server's local dialect back to wire paths).
+func (c *Conn) Root(p string) string { return fsx.RootPath(p) }
 
 // Stat implements fsx.Provider.
 func (c *Conn) Stat(_ context.Context, p string) (fsx.Entry, error) {
