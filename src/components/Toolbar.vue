@@ -79,23 +79,17 @@ async function toggleTheme() {
   <!-- `data-tauri-drag-region="deep"` = the whole subtree is a drag handle,
        except interactive elements (button/a/input/select/label/…), which Tauri's
        drag script skips on its own. A bare attribute only matched this element
-       itself, so clicks on any child (e.g. the flex-1 spacer) never dragged. -->
+       itself, so clicks on any child (e.g. the flex-1 spacer) never dragged.
+
+       One 52px row, no brand block: `pl-[80px]` is the traffic-light gutter and
+       every child stays ≤28px tall so `items-center` puts the whole bar on one
+       centre line. That centre line is shared with the native window buttons —
+       `center_traffic_lights` in src-tauri/src/lib.rs moves them to the midpoint
+       of the same 52px, so keep `h-[52px]` and `TITLE_BAR_HEIGHT` in sync. -->
   <header
     class="flex h-[52px] shrink-0 items-center gap-2 border-b border-line/70 bg-sidebar/60 pl-[80px] pr-3 backdrop-blur-xl"
     data-tauri-drag-region="deep"
   >
-    <!-- brand -->
-    <div class="flex items-center gap-2 pr-1">
-      <div
-        class="flex h-[22px] w-[22px] items-center justify-center rounded-[6px] bg-gradient-to-b from-[#4aa3ff] to-[#0a6cf0] shadow-sm"
-      >
-        <Icon name="folder" :size="13" :stroke="2" class="text-white" />
-      </div>
-      <span class="text-[13px] font-semibold tracking-[-0.01em]">file-j</span>
-    </div>
-
-    <div class="mx-0.5 h-4 w-px bg-line/70" />
-
     <!-- session switcher -->
     <div class="relative">
       <button

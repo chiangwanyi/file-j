@@ -39,18 +39,19 @@
 └──────────────────────────────────────────────────────────────┘
 ```
 
-### 2.1 Rust / Tauri 壳层（`src-tauri/src/lib.rs`，约 340 行）
+### 2.1 Rust / Tauri 壳层（`src-tauri/src/lib.rs`，约 440 行）
 
 | 职责 | 说明 |
 | --- | --- |
 | 创建窗口 | `tauri.conf.json`：1240×800、`titleBarStyle: Overlay`、最小尺寸、CSP |
+| 对齐红绿灯 | `center_traffic_lights()`：把系统三色按钮垂直居中到 52px 顶栏中线（AppKit 默认放在 28pt 标题栏里，偏高 12pt）；窗口尺寸/外观变化时重算 |
 | 构建菜单栏 | `build_menu()`：全中文原生菜单（`FileJ` / 文件 / 编辑 / 显示 / 窗口 / 帮助），采用 predefined item 以保留系统快捷键 |
 | 启动 sidecar | 生成随机 token，`spawn(file-jd --token … --addr 127.0.0.1:0)` |
 | 读取握手 | 读 stdout **第一行** JSON（`{port, token, pid, version, configDir}`），后续 stdout 仅转发到日志 |
 | 暴露端点 | `#[tauri::command] backend_info()`，前端启动时调用一次 |
 | 退出清理 | `RunEvent::Exit` 时 kill 子进程；Go 侧另有父进程消失自检，双保险 |
 
-**明确不做**：没有 `read_dir`、没有 `ssh`、没有 YAML 解析、没有传输逻辑、没有把 Go 的 RPC 逐条代理成 Tauri command。Rust 里唯一的“判断”是找 sidecar 路径。
+**明确不做**：没有 `read_dir`、没有 `ssh`、没有 YAML 解析、没有传输逻辑、没有把 Go 的 RPC 逐条代理成 Tauri command。Rust 里唯一的“判断”是找 sidecar 路径；唯一的原生 UI 改动是把系统红绿灯对齐到 52px 顶栏中线。
 
 > 为什么不用 `invoke` 直连业务：若前端调用 Rust command 再由 Rust 转发给 Go，Rust 就会变成业务网关，违反“Rust 只做框架”的约束，也让每次调用多一层无意义转发。
 

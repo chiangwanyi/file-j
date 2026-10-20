@@ -1,11 +1,13 @@
 // The Rust layer is intentionally thin.
 //
-// It owns exactly four things:
+// It owns exactly five things:
 //   1. creating the native window (Tauri framework responsibility),
 //   2. building the menu bar (Chinese labels, see `build_menu`),
-//   3. spawning the Go business backend as a sidecar and reading its one-line
+//   3. re-centring the macOS traffic lights on the custom title bar
+//      (`center_traffic_lights`),
+//   4. spawning the Go business backend as a sidecar and reading its one-line
 //      handshake from stdout,
-//   4. exposing that handshake to the WebView and killing the child on exit.
+//   5. exposing that handshake to the WebView and killing the child on exit.
 //
 // There is no file-system, SSH, transfer or persistence code here. If a feature
 // needs behaviour, it belongs in backend/ (Go) or src/ (Vue).
@@ -303,6 +305,90 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     )
 }
 
+/// Height of the custom title bar in CSS pixels.
+///
+/// Must stay in sync with `h-[52px]` in `src/components/Toolbar.vue`: the
+/// traffic lights are centred on this midpoint, so the two numbers are the same
+/// contract seen from each side.
+#[cfg(target_os = "macos")]
+const TITLE_BAR_HEIGHT: f64 = 52.0;
+
+/// Vertically centres the traffic lights inside the custom title bar.
+///
+/// AppKit centres the buttons in a stock 28pt title bar, which leaves them ~12pt
+/// above the middle of a 52px HTML row. They live in the title bar container and
+/// keep a fixed offset from its *bottom* edge, so the container's height is the
+/// one knob that moves them: growing it by N pushes the buttons down by N while
+/// the web view underneath is untouched.
+///
+/// `TITLE_BAR_HEIGHT / 2 + anchor` is the container height that lands the button
+/// centre on the bar's midpoint. The anchor is measured from the frame chain
+/// (container → button group → button) on every call rather than cached, so the
+/// correction is absolute and repeated calls are no-ops instead of drift.
+///
+/// AppKit re-lays the title bar out on resize and theme changes, so this runs
+/// again on those events.
+#[cfg(target_os = "macos")]
+fn center_traffic_lights(window: &tauri::WebviewWindow) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+
+    let Ok(raw) = window.ns_window() else {
+        return;
+    };
+    if raw.is_null() {
+        return;
+    }
+    let ns_window = raw.cast::<AnyObject>();
+
+    unsafe {
+        // NSWindowButton: 0 = close, 1 = miniaturise, 2 = zoom. The close button
+        // sits at the same height as its two neighbours.
+        let close: *mut AnyObject = msg_send![ns_window, standardWindowButton: 0usize];
+        if close.is_null() {
+            return;
+        }
+        // close → button group → title bar container.
+        let group: *mut AnyObject = msg_send![close, superview];
+        if group.is_null() {
+            return;
+        }
+        let container: *mut AnyObject = msg_send![group, superview];
+        if container.is_null() {
+            return;
+        }
+
+        let container_frame: CGRect = msg_send![container, frame];
+        let window_frame: CGRect = msg_send![ns_window, frame];
+        let group_frame: CGRect = msg_send![group, frame];
+        let button_frame: CGRect = msg_send![close, frame];
+        if container_frame.size.height <= 0.0 || window_frame.size.height <= 0.0 {
+            return;
+        }
+
+        // Distance from the container's bottom edge to the button centre.
+        let anchor = group_frame.origin.y
+            + button_frame.origin.y
+            + button_frame.size.height / 2.0;
+        let target_height = TITLE_BAR_HEIGHT / 2.0 + anchor;
+        if (container_frame.size.height - target_height).abs() < 0.5 {
+            return;
+        }
+
+        // Views use a bottom-left origin, so `window_height - height` keeps the
+        // container's top edge glued to the window's top edge.
+        let frame = CGRect::new(
+            CGPoint::new(
+                container_frame.origin.x,
+                window_frame.size.height - target_height,
+            ),
+            CGSize::new(container_frame.size.width, target_height),
+        );
+        let _: () = msg_send![container, setFrame: frame];
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
@@ -325,6 +411,29 @@ pub fn run() {
                 eprintln!("[{}] {}", APP_NAME, err);
                 *app.state::<BackendState>().error.lock().unwrap() = Some(err);
             }
+
+            // Centre the traffic lights on the 52px title bar, and redo it
+            // whenever AppKit lays the title bar out again.
+            #[cfg(target_os = "macos")]
+            if let Some(window) = app.get_webview_window("main") {
+                center_traffic_lights(&window);
+                // Hold the app handle, not the window: a window clone inside its
+                // own event handler would keep it alive forever.
+                let app_handle = app.handle().clone();
+                window.on_window_event(move |event| {
+                    if matches!(
+                        event,
+                        tauri::WindowEvent::Resized(_)
+                            | tauri::WindowEvent::ScaleFactorChanged { .. }
+                            | tauri::WindowEvent::ThemeChanged(_)
+                    ) {
+                        if let Some(window) = app_handle.get_webview_window("main") {
+                            center_traffic_lights(&window);
+                        }
+                    }
+                });
+            }
+
             Ok(())
         })
         .build(tauri::generate_context!())
