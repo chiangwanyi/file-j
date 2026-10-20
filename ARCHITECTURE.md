@@ -39,11 +39,12 @@
 └──────────────────────────────────────────────────────────────┘
 ```
 
-### 2.1 Rust / Tauri 壳层（`src-tauri/src/lib.rs`，约 250 行）
+### 2.1 Rust / Tauri 壳层（`src-tauri/src/lib.rs`，约 340 行）
 
 | 职责 | 说明 |
 | --- | --- |
 | 创建窗口 | `tauri.conf.json`：1240×800、`titleBarStyle: Overlay`、最小尺寸、CSP |
+| 构建菜单栏 | `build_menu()`：全中文原生菜单（`FileJ` / 文件 / 编辑 / 显示 / 窗口 / 帮助），采用 predefined item 以保留系统快捷键 |
 | 启动 sidecar | 生成随机 token，`spawn(file-jd --token … --addr 127.0.0.1:0)` |
 | 读取握手 | 读 stdout **第一行** JSON（`{port, token, pid, version, configDir}`），后续 stdout 仅转发到日志 |
 | 暴露端点 | `#[tauri::command] backend_info()`，前端启动时调用一次 |

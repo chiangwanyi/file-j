@@ -1,10 +1,11 @@
 // The Rust layer is intentionally thin.
 //
-// It owns exactly three things:
+// It owns exactly four things:
 //   1. creating the native window (Tauri framework responsibility),
-//   2. spawning the Go business backend as a sidecar and reading its one-line
+//   2. building the menu bar (Chinese labels, see `build_menu`),
+//   3. spawning the Go business backend as a sidecar and reading its one-line
 //      handshake from stdout,
-//   3. exposing that handshake to the WebView and killing the child on exit.
+//   4. exposing that handshake to the WebView and killing the child on exit.
 //
 // There is no file-system, SSH, transfer or persistence code here. If a feature
 // needs behaviour, it belongs in backend/ (Go) or src/ (Vue).
@@ -16,7 +17,17 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
+use tauri::menu::{Menu, PredefinedMenuItem, Submenu, HELP_SUBMENU_ID, WINDOW_SUBMENU_ID};
+#[cfg(target_os = "macos")]
+use tauri::menu::AboutMetadata;
 use tauri::{Manager, RunEvent, State};
+
+/// Product name: shown in the menu bar and in the About panel.
+///
+/// The menu bar entry is the title of the first submenu below, but Finder, the
+/// Dock and the About panel take the name from the bundle (`productName`), so
+/// both strings must stay identical. Keep in sync with `tauri.conf.json`.
+const APP_NAME: &str = "FileJ";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BackendInfo {
@@ -199,6 +210,99 @@ fn shutdown_backend(app: &tauri::AppHandle) {
     }
 }
 
+/// Builds the native menu bar. Every label is Chinese, and the standard
+/// editing/window items keep their system accelerators (⌘C, ⌘V, ⌘W, ⌘Q …),
+/// because they are predefined menu items rather than plain text entries.
+///
+/// The front-end owns the file-manager shortcuts (F5, F6, ⌘R, ⇧⌘N …), so no
+/// accelerator added here collides with them.
+fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+    #[cfg(target_os = "macos")]
+    let about = AboutMetadata {
+        name: Some(APP_NAME.to_string()),
+        version: Some(env!("CARGO_PKG_VERSION").to_string()),
+        ..Default::default()
+    };
+
+    // macOS only: the application menu (first submenu) replaces the implicit
+    // "About / Hide / Quit" group; its title is what the menu bar displays.
+    #[cfg(target_os = "macos")]
+    let app_menu = Submenu::with_items(
+        app,
+        APP_NAME,
+        true,
+        &[
+            &PredefinedMenuItem::about(app, Some("关于 FileJ"), Some(about))?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::services(app, Some("服务"))?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::hide(app, Some("隐藏 FileJ"))?,
+            &PredefinedMenuItem::hide_others(app, Some("隐藏其他"))?,
+            &PredefinedMenuItem::show_all(app, Some("显示全部"))?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::quit(app, Some("退出 FileJ"))?,
+        ],
+    )?;
+
+    let file_menu = Submenu::with_items(
+        app,
+        "文件",
+        true,
+        &[&PredefinedMenuItem::close_window(app, Some("关闭窗口"))?],
+    )?;
+
+    let edit_menu = Submenu::with_items(
+        app,
+        "编辑",
+        true,
+        &[
+            &PredefinedMenuItem::undo(app, Some("撤销"))?,
+            &PredefinedMenuItem::redo(app, Some("重做"))?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::cut(app, Some("剪切"))?,
+            &PredefinedMenuItem::copy(app, Some("复制"))?,
+            &PredefinedMenuItem::paste(app, Some("粘贴"))?,
+            &PredefinedMenuItem::select_all(app, Some("全选"))?,
+        ],
+    )?;
+
+    let view_menu = Submenu::with_items(
+        app,
+        "显示",
+        true,
+        &[&PredefinedMenuItem::fullscreen(app, Some("进入全屏幕"))?],
+    )?;
+
+    let window_menu = Submenu::with_id_and_items(
+        app,
+        WINDOW_SUBMENU_ID,
+        "窗口",
+        true,
+        &[
+            &PredefinedMenuItem::minimize(app, Some("最小化"))?,
+            &PredefinedMenuItem::maximize(app, Some("缩放"))?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::close_window(app, Some("关闭窗口"))?,
+            &PredefinedMenuItem::bring_all_to_front(app, Some("前置全部窗口"))?,
+        ],
+    )?;
+
+    let help_menu = Submenu::with_id_and_items(app, HELP_SUBMENU_ID, "帮助", true, &[])?;
+
+    Menu::with_items(
+        app,
+        &[
+            #[cfg(target_os = "macos")]
+            &app_menu,
+            &file_menu,
+            &edit_menu,
+            &view_menu,
+            &window_menu,
+            &help_menu,
+        ],
+    )
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
@@ -206,8 +310,19 @@ pub fn run() {
         .manage(BackendState::default())
         .invoke_handler(tauri::generate_handler![backend_info])
         .setup(|app| {
+            // A menu failure must never stop the app from starting: log it and
+            // fall back to whatever menu the runtime installed.
+            match build_menu(app.handle()) {
+                Ok(menu) => {
+                    if let Err(err) = app.set_menu(menu) {
+                        eprintln!("[{}] 设置菜单失败: {}", APP_NAME, err);
+                    }
+                }
+                Err(err) => eprintln!("[{}] 构建菜单失败: {}", APP_NAME, err),
+            }
+
             if let Err(err) = spawn_backend(app.handle()) {
-                eprintln!("[file-j] {}", err);
+                eprintln!("[{}] {}", APP_NAME, err);
                 *app.state::<BackendState>().error.lock().unwrap() = Some(err);
             }
             Ok(())
