@@ -8,6 +8,7 @@ import { computed, reactive } from "vue";
 import { errorCode, errorText, rpc } from "../lib/ipc";
 import type {
   AppConfig,
+  Favorite,
   FsEntry,
   ListResult,
   Pane,
@@ -58,6 +59,8 @@ function emptyPane(side: Side): Pane {
   return {
     side,
     sessionId: null,
+    pendingSessionId: null,
+    restoring: false,
     // The starting path is replaced by ui.state (which persists the last
     // location) or fs.home right after boot; "/" is only a placeholder and is
     // always a valid POSIX root, including for a Windows SFTP session.
@@ -130,6 +133,7 @@ export const state = reactive({
   config: defaultConfig(),
   sessions: [] as SessionItem[],
   places: [] as { name: string; path: string }[],
+  favorites: [] as Favorite[],
   left: emptyPane("local"),
   right: emptyPane("remote"),
   active: "left" as PaneKey,
@@ -327,11 +331,23 @@ export async function updateConfig(patch: {
 
 // ------------------------------------------------------------- pane loading
 
+/**
+ * Applies one remembered pane.
+ *
+ * A remote pane deliberately does *not* adopt its session ID here. `sessionId`
+ * means "there is a live link", and only a successful connect may set it: if
+ * boot adopted the saved ID, the pane would list the folder and the backend
+ * would dial the server before the window is even visible - the app then sat on
+ * the splash for the full SSH timeout. The remembered session waits in
+ * `pendingSessionId` and `restoreRemotePanes` re-opens it after the UI is up.
+ */
 function applyPaneState(key: PaneKey, saved: UIState["left"]): void {
   const target = pane(key);
   target.side = saved.kind;
   target.path = saved.path;
-  target.sessionId = saved.sessionId ?? null;
+  target.sessionId = null;
+  target.pendingSessionId = saved.kind === "remote" ? saved.sessionId ?? null : null;
+  target.restoring = Boolean(target.pendingSessionId);
   target.sortKey = (saved.sortKey as Pane["sortKey"]) || "name";
   target.sortDesc = Boolean(saved.sortDesc);
   target.history = [];
@@ -514,6 +530,50 @@ export function selectByPath(key: PaneKey, path: string): void {
   }
 }
 
+// ----------------------------------------------------------------- favorites
+
+/**
+ * Bookmarked local folders. The backend owns the list (favorites.yaml) because
+ * the sidebar is not the only entry point: the file table's context menu adds
+ * and removes the same entries, and a second window must see them too.
+ *
+ * Comparison is by exact path. Every path that reaches us is already absolute
+ * and cleaned by the backend (`a.local.Resolve`), so a plain string compare is
+ * enough and stays correct on Windows where the separator differs.
+ */
+export function isFavorite(path: string): boolean {
+  return state.favorites.some((item) => item.path === path);
+}
+
+export async function loadFavorites(): Promise<void> {
+  state.favorites = await rpc.request<Favorite[]>("favorite.list");
+}
+
+export async function addFavorite(path: string, name?: string): Promise<void> {
+  const saved = await rpc.request<Favorite>("favorite.add", { path, name: name ?? "" });
+  if (!isFavorite(saved.path)) state.favorites.push(saved);
+  toast("success", "已收藏文件夹", saved.name || saved.path);
+}
+
+export async function removeFavorite(path: string): Promise<void> {
+  await rpc.request("favorite.remove", { path });
+  state.favorites = state.favorites.filter((item) => item.path !== path);
+}
+
+/** Adds or removes a bookmark, whichever the current state calls for. */
+export async function toggleFavorite(path: string, name?: string): Promise<void> {
+  try {
+    if (isFavorite(path)) {
+      await removeFavorite(path);
+      toast("info", "已取消收藏", name ?? path);
+    } else {
+      await addFavorite(path, name);
+    }
+  } catch (error) {
+    toast("error", "无法更新收藏", errorText(error));
+  }
+}
+
 // ------------------------------------------------------------------ sessions
 
 /**
@@ -586,11 +646,21 @@ export async function submitPassword(password: string): Promise<void> {
   }
 }
 
+/**
+ * Opens a session and points a pane at it.
+ *
+ * `silent` suppresses the success toast; `quiet` suppresses *every* prompt as
+ * well (password dialog, host-key warning, error toast) and parks the failure
+ * on the pane instead. Quiet is what the boot-time reconnect uses: a launch
+ * must never greet the user with a modal about a server that happens to be
+ * offline.
+ */
 export async function connectSession(
   sessionId: string,
   password?: string,
   targetKey?: PaneKey,
   silent = false,
+  quiet = false,
 ): Promise<boolean> {
   const item = state.sessions.find((entry) => entry.session.id === sessionId);
   if (!item) {
@@ -623,6 +693,11 @@ export async function connectSession(
   } catch (error) {
     const code = errorCode(error);
     const message = errorText(error);
+    if (quiet) {
+      // Leave the pane unlinked but keep the reason visible in it.
+      target.error = message;
+      return false;
+    }
     if (code === "AUTH_FAILED" || message.includes("需要密码")) {
       if (state.dialog.password) {
         state.dialog.password.error = message;
@@ -644,6 +719,8 @@ export async function connectSession(
     return false;
   } finally {
     state.connectingId = "";
+    target.restoring = false;
+    target.pendingSessionId = null;
   }
 }
 
@@ -661,6 +738,8 @@ export async function disconnectPane(key: PaneKey): Promise<void> {
   target.entries = [];
   target.selection = [];
   target.sessionId = null;
+  target.pendingSessionId = null;
+  target.restoring = false;
   target.path = ".";
   target.parent = "/";
   toast("info", "已断开远程连接");
@@ -1016,6 +1095,66 @@ export function setSplitRatio(ratio: number): void {
 
 // --------------------------------------------------------------------- boot
 
+/**
+ * Re-opens the remote pane that was in use when the app was last closed.
+ *
+ * Runs *after* the splash is gone and never on the boot critical path: a dead
+ * or slow SSH host must cost the user a spinner inside the pane, not a frozen
+ * "正在启动 Go 后端服务…" screen.
+ *
+ * Failure stays quiet - no toast, no password prompt at launch. The pane falls
+ * back to the "not connected" state with the reason attached, and the sidebar
+ * still has the session one click away.
+ */
+async function restoreRemotePane(key: PaneKey): Promise<void> {
+  const target = pane(key);
+  const sessionId = target.pendingSessionId;
+  if (!sessionId) {
+    target.restoring = false;
+    return;
+  }
+  const item = state.sessions.find((entry) => entry.session.id === sessionId);
+  target.pendingSessionId = null;
+  if (!item) {
+    target.restoring = false;
+    return;
+  }
+  // Without a stored credential there is nothing to authenticate with, so
+  // connecting would mean prompting for a password during launch.
+  if (!item.hasCredential) {
+    target.restoring = false;
+    return;
+  }
+  // Remember where the pane was pointing: connectSession lists the session's
+  // configured path first, and the last visited folder wins.
+  const wanted = target.path;
+  const ok = await connectSession(sessionId, undefined, key, true, true);
+  if (!ok) {
+    target.restoring = false;
+    return;
+  }
+  if (wanted && wanted !== "." && target.path !== wanted) {
+    await loadPane(key, wanted, { push: true, silent: true });
+  }
+  target.restoring = false;
+}
+
+async function restoreRemotePanes(): Promise<void> {
+  const keys = (["left", "right"] as PaneKey[]).filter(
+    (key) => pane(key).side === "remote" && pane(key).restoring,
+  );
+  await Promise.all(keys.map(restoreRemotePane));
+}
+
+/**
+ * Brings the workspace up in two stages so the window is usable immediately.
+ *
+ * Stage 1 (awaited, local only): handshake metadata plus the local directory
+ * listing. Purely disk work - one YAML read and one `ReadDir` - so it finishes
+ * in milliseconds.
+ * Stage 2 (background): re-opening a remembered SSH session, which may block
+ * until the connect timeout expires.
+ */
 export async function boot(): Promise<void> {
   rpc.onStateChange = (connection) => {
     state.connected = connection === "open";
@@ -1027,13 +1166,14 @@ export async function boot(): Promise<void> {
 
   try {
     await rpc.connect();
-    const [info, config, sessions, uiState, tasks, places] = await Promise.all([
+    const [info, config, sessions, uiState, tasks, places, favorites] = await Promise.all([
       rpc.request<{ version: string; configDir: string }>("app.info"),
       rpc.request<{ config: AppConfig; paths: ResultPaths }>("config.get"),
       rpc.request<SessionItem[]>("session.list"),
       rpc.request<UIState>("ui.state.get"),
       rpc.request<TransferTask[]>("transfer.list"),
       rpc.request<{ name: string; path: string }[]>("fs.places"),
+      rpc.request<Favorite[]>("favorite.list"),
     ]);
 
     state.backendVersion = info.version;
@@ -1043,6 +1183,7 @@ export async function boot(): Promise<void> {
     state.sessions = sessions;
     state.transfers = tasks;
     state.places = places;
+    state.favorites = favorites;
     state.splitRatio = uiState.splitRatio;
     state.sidebarOpen = config.config.ui.sidebarVisible;
     state.queueOpen = config.config.ui.transferPanelOpen;
@@ -1052,28 +1193,20 @@ export async function boot(): Promise<void> {
     state.active = uiState.activePane;
     applyTheme();
 
-    await Promise.all([
-      loadPane("left", state.left.path, { push: false, silent: true }),
-      loadPane("right", state.right.path, { push: false, silent: true }),
-    ]);
-
-    if (state.left.side === "remote" && state.left.sessionId) {
-      state.active = "left";
-    }
-
-    const remembered = [state.left, state.right].find(
-      (p) => p.side === "remote" && p.sessionId,
+    // Local panes only: they are the ones that can be shown right away.
+    const localPanes = (["left", "right"] as PaneKey[]).filter((key) => pane(key).side === "local");
+    await Promise.all(
+      localPanes.map((key) => loadPane(key, pane(key).path, { push: false, silent: true })),
     );
-    if (remembered?.sessionId) {
-      const item = state.sessions.find((entry) => entry.session.id === remembered.sessionId);
-      if (item?.hasCredential) {
-        const key: PaneKey = state.left === remembered ? "left" : "right";
-        await connectSession(remembered.sessionId, undefined, key, true).catch(() => undefined);
-      }
+
+    if (state.left.side === "remote" && state.left.pendingSessionId) {
+      state.active = "left";
     }
   } catch (error) {
     state.bootError = errorText(error);
   } finally {
     state.ready = true;
   }
+
+  if (!state.bootError) void restoreRemotePanes();
 }

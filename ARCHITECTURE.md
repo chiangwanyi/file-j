@@ -66,7 +66,7 @@
 | `internal/fsx` | 文件系统抽象 + 本地实现 | `Provider` 接口；`Local` 基于 `os`；路径、`ls -l` 风格权限串、`~` 展开、废纸篓。平台差异拆到 `paths_*.go` / `os_*.go` / `trash_*.go` |
 | `internal/remote` | SSH/SFTP | `x/crypto/ssh` + `pkg/sftp`；连接复用、keepalive、空闲回收、主机密钥策略；`Conn` 实现 `fsx.Provider` |
 | `internal/transfer` | 传输引擎 | 队列、并发、递归、进度节流、取消、冲突策略、移动快路径 |
-| `internal/config` | YAML 持久化 | 四个文档、原子写、默认值、范围收敛、手改容错 |
+| `internal/config` | YAML 持久化 | 五个文档、原子写、默认值、范围收敛、手改容错 |
 | `internal/credentials` | 密钥存储 | macOS Keychain（`security` CLI）/ Windows 凭据管理器（Win32 `CredWriteW`），YAML 只存引用；失败降级为内存 |
 | `internal/testutil` | 测试用 SSH/SFTP 服务器 | 仅被 `_test.go` 引用，不进产物 |
 
@@ -106,6 +106,8 @@ Tauri 进程                      Go 进程                        WebView
     │                              │──── responses ───────────────▶│
 ```
 
+- **启动不等待 SSH。** 前端分两段启动：第一段只做握手 + 读 YAML + 列本地目录（毫秒级），完成后立刻撤掉启动页；第二段在后台重连上次的远程会话，进度显示在那个面板里，可随时取消。远程会话若没有已保存的凭据则不会自动连接，避免开机弹密码框。
+- 后端另有两道兜底：`session.connect` 的上下文被裁剪为 `connectTimeoutSeconds + 5s`；SSH 版本握手的 socket deadline 取「配置超时」与「调用方 deadline」的较小值。否则一个「端口通但不说话」的主机会把请求拖到 IPC 的 5 分钟上限。
 - 端口由内核分配（`127.0.0.1:0`），避免固定端口冲突。
 - token 由 Rust 用 `getrandom` 生成 24 字节并注入，Go 端常量时间比较；`Origin` 仅允许 `tauri://`、`localhost`、`127.0.0.1`。
 - 进程只监听回环地址，不对外网暴露。
@@ -148,6 +150,7 @@ Tauri 进程                      Go 进程                        WebView
 | 应用 | `app.info` `app.shutdown` `config.get` `config.set` `config.reveal` |
 | 会话 | `session.list` `session.save` `session.delete` `session.connect` `session.disconnect` `session.test` `session.status` |
 | 文件 | `fs.list` `fs.stat` `fs.home` `fs.places` `fs.mkdir` `fs.rename` `fs.delete` `fs.open` `fs.reveal` |
+| 收藏 | `favorite.list` `favorite.add` `favorite.remove` |
 | 传输 | `transfer.create` `transfer.list` `transfer.cancel` `transfer.retry` `transfer.remove` `transfer.clear` |
 | 界面 | `ui.state.get` `ui.state.set` |
 | 信任 | `known_hosts.list` `known_hosts.delete` |
@@ -163,11 +166,12 @@ Tauri 进程                      Go 进程                        WebView
 ├── config.yaml          # 外观、传输默认值、SSH 策略、日志级别
 ├── sessions.yaml        # 会话定义（绝不含密码）
 ├── ui-state.yaml        # 双栏路径、会话、排序、分隔比例、活动面板
+├── favorites.yaml       # 收藏的本地文件夹（侧边栏「收藏」区）
 ├── known_hosts.yaml     # TOFU 主机密钥指纹
 └── logs/backend.log     # 文本日志，>4MB 启动时轮换
 ```
 
-四个文档分离的理由：手改坏一个不会拖垮其他；`ui-state.yaml` 写入频繁（每次导航/排序），不应反复重写会话配置。
+五个文档分离的理由：手改坏一个不会拖垮其他；`ui-state.yaml` 写入频繁（每次导航/排序），不应反复重写会话或收藏配置。
 
 ### 4.2 `config.yaml`
 
@@ -226,7 +230,19 @@ splitRatio: 0.5
 activePane: left
 ```
 
-### 4.5 `known_hosts.yaml`
+### 4.5 `favorites.yaml`
+
+```yaml
+version: 1
+items:
+  - path: /Users/me/project
+    name: project
+    addedAt: 2026-10-22T21:00:00Z
+```
+
+只收录**本地文件夹**：SFTP 路径离开会话就没有意义，侧边栏已有会话列表。`favorite.add` 在 Go 侧展开 `~`/相对路径并 `stat` 校验，非目录或不存在直接拒绝（`NOT_FOUND` / `BAD_REQUEST`）；同一路径重复收藏为幂等操作，保持插入顺序。加载时丢弃空路径与重复项，手改坏文件只会少几条收藏。
+
+### 4.6 `known_hosts.yaml`
 
 ```yaml
 version: 1
@@ -237,7 +253,7 @@ hosts:
     addedAt: 2026-10-19T22:00:00Z
 ```
 
-### 4.6 写入策略
+### 4.7 写入策略
 
 - 每次写：`写临时文件 → fsync → rename`，避免半截文件；若目标卷或安全软件拒绝 rename（FAT/exFAT、部分终端防护），退化为原地重写，保证配置仍能落盘。
 - 权限 `0600`，目录 `0700`。
@@ -263,6 +279,7 @@ hosts:
 | 打开文件 | 本地 `open(1)`；远程文件双击 = 下载到对侧 | 不内建预览器 / 编辑器 |
 | 拖拽 | 面板间 HTML5 DnD，落在文件夹行可指定目标目录 | 不做面板内拖拽移动（用 ⌘X/右键移动） |
 | 快捷键 | F5 复制、F6 移动、⌫ 上级、⌘⌫ 删除、⌘R 刷新、⇧⌘N 新建 | 与 WinSCP 习惯对齐 |
+| 收藏夹 | 右键本地文件夹（或空白处收藏当前文件夹）→ `favorite.*` 写入 `favorites.yaml`；侧边栏点击即跳转 | 只支持本地目录；远程路径依赖会话，不进收藏 |
 
 ### 5.2 本地 ↔ 本地
 

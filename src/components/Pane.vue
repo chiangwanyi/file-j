@@ -14,6 +14,7 @@ import {
   goBack,
   goForward,
   goUp,
+  isFavorite,
   navigate,
   openSessionDialog,
   pane,
@@ -22,11 +23,12 @@ import {
   sessionById,
   setActive,
   state,
+  toggleFavorite,
   toggleSidebar,
   updateConfig,
 } from "../stores/workspace";
 import type { PaneKey } from "../lib/types";
-import { formatBytes } from "../lib/format";
+import { basename, formatBytes } from "../lib/format";
 
 const props = defineProps<{ paneKey: PaneKey }>();
 
@@ -34,6 +36,20 @@ const current = computed(() => pane(props.paneKey));
 const isRemote = computed(() => current.value.side === "remote");
 const session = computed(() => sessionById(current.value.sessionId));
 const connected = computed(() => !isRemote.value || Boolean(current.value.sessionId));
+
+// A reconnect started by boot(): the pane owns no live session yet, so it must
+// show progress instead of the "empty folder" table or the "not connected"
+// invitation.
+const restoring = computed(() => current.value.restoring && !current.value.sessionId);
+const pendingSessionName = computed(() => {
+  const pending = sessionById(current.value.pendingSessionId);
+  return pending ? `${pending.name} · ${pending.user}@${pending.host}` : "上一次使用的会话";
+});
+
+function skipRestore() {
+  current.value.restoring = false;
+  current.value.pendingSessionId = null;
+}
 
 const colorDot: Record<string, string> = {
   blue: "bg-[#3b99f7]",
@@ -81,6 +97,18 @@ const menuItems = computed<MenuAction[]>(() => {
       icon: "folder-plus",
       action: () => createFolder(props.paneKey),
     },
+  ];
+  // Only local folders can be bookmarked: a remote path means nothing without
+  // its session, and the sidebar already lists sessions for that.
+  if (!isRemote.value) {
+    const marked = isFavorite(current.value.path);
+    items.push({
+      label: marked ? "取消收藏当前文件夹" : "收藏当前文件夹",
+      icon: marked ? "star-filled" : "star",
+      action: () => void toggleFavorite(current.value.path, basename(current.value.path)),
+    });
+  }
+  items.push(
     {
       label: state.config.ui.showHiddenFiles ? "隐藏以点开头的文件" : "显示隐藏文件",
       icon: state.config.ui.showHiddenFiles ? "eye-off" : "eye",
@@ -102,7 +130,7 @@ const menuItems = computed<MenuAction[]>(() => {
       icon: "copy",
       action: () => navigator.clipboard?.writeText(current.value.path),
     },
-  ];
+  );
   if (isRemote.value && current.value.sessionId) {
     items.push({ label: "", separator: true });
     items.push({
@@ -195,7 +223,7 @@ function openSessionManager() {
         <Icon name="chevron-right" :size="13" />
       </button>
       <button class="icon-btn h-6 w-6" title="上一级" :disabled="!connected" @click="goUp(paneKey)">
-        <Icon name="corner-down-left" :size="12.5" class="rotate-180" />
+        <Icon name="arrow-up" :size="13" />
       </button>
       <div class="relative ml-1 min-w-0 flex-1">
         <input
@@ -218,6 +246,26 @@ function openSessionManager() {
       <FileTable :pane-key="paneKey" />
     </template>
 
+    <!-- Boot-time reconnect: the pane is usable again the moment this finishes,
+         and the rest of the window never waits for it. -->
+    <div
+      v-else-if="restoring"
+      class="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 text-center"
+    >
+      <div class="flex h-9 w-9 items-center justify-center rounded-full bg-ink/[0.06]">
+        <Icon name="refresh" :size="17" class="animate-spin text-accent" />
+      </div>
+      <div>
+        <p class="text-[12.5px] font-medium">正在恢复远程连接…</p>
+        <p class="mt-0.5 text-[11px] text-muted">
+          {{ pendingSessionName }}
+        </p>
+      </div>
+      <button class="mt-1 text-[11px] font-medium text-accent hover:underline" @click="skipRestore">
+        取消重连
+      </button>
+    </div>
+
     <div v-else class="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
       <div class="flex h-9 w-9 items-center justify-center rounded-full bg-ink/[0.06]">
         <Icon name="server" :size="18" :stroke="1.4" class="text-muted/70" />
@@ -225,6 +273,9 @@ function openSessionManager() {
       <div>
         <p class="text-[12.5px] font-medium">尚未连接远程服务器</p>
         <p class="mt-0.5 text-[11px] text-muted">选择一个已保存的会话，或新建一个 SSH/SFTP 连接</p>
+        <p v-if="current.error" class="mx-auto mt-1.5 max-w-[300px] break-words text-[10.5px] leading-[1.45] text-danger/90">
+          {{ current.error }}
+        </p>
       </div>
       <div v-if="remoteSessions.length" class="mt-1 w-full max-w-[280px] space-y-1">
         <button

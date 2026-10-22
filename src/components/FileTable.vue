@@ -13,6 +13,7 @@ import {
 import {
   createFolder,
   deleteEntries,
+  isFavorite,
   openEntry,
   pane,
   refreshPane,
@@ -27,9 +28,10 @@ import {
   startTransfer,
   state,
   toast,
+  toggleFavorite,
 } from "../stores/workspace";
 import type { FsEntry, PaneKey } from "../lib/types";
-import { formatBytes, formatDate } from "../lib/format";
+import { basename, formatBytes, formatDate } from "../lib/format";
 
 const props = defineProps<{ paneKey: PaneKey }>();
 
@@ -124,6 +126,19 @@ const menuItems = computed<MenuAction[]>(() => {
       label: "重命名",
       icon: "file-text",
       action: () => entry && renameEntry(props.paneKey, entry),
+    });
+  }
+  // Bookmarks are local folders only: an SFTP path is meaningless without its
+  // session, and a file has nothing to open.
+  if (!isRemote.value && (!entry || entry.isDir)) {
+    // With a folder row selected that folder is the target; on empty space it is
+    // the folder currently open, which saves a trip to the "更多" menu.
+    const target = entry ?? { path: current.value.path, name: basename(current.value.path) };
+    const marked = isFavorite(target.path);
+    items.push({
+      label: marked ? "取消收藏" : entry ? "收藏此文件夹" : "收藏当前文件夹",
+      icon: marked ? "star-filled" : "star",
+      action: () => void toggleFavorite(target.path, target.name),
     });
   }
   items.push({

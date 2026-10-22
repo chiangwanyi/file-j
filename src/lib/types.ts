@@ -150,6 +150,13 @@ export interface SessionStatus {
   since?: string;
 }
 
+/** One bookmarked local folder (backend/internal/config Favorite). */
+export interface Favorite {
+  path: string;
+  name?: string;
+  addedAt?: string;
+}
+
 export interface KnownHost {
   host: string;
   algorithm: string;
@@ -171,12 +178,23 @@ export interface ResultPaths {
   config: string;
   sessions: string;
   uiState: string;
+  favorites?: string;
   knownHosts: string;
 }
 
 export interface Pane {
   side: Side;
   sessionId: string | null;
+  /**
+   * Session the pane was last showing, kept while a link is being re-opened.
+   *
+   * On boot a remote pane starts with `sessionId: null` so nothing is dialled
+   * before the window is visible; the remembered session waits here until the
+   * background reconnect succeeds.
+   */
+  pendingSessionId: string | null;
+  /** A background reconnect for `pendingSessionId` is in flight. */
+  restoring: boolean;
   path: string;
   parent: string;
   entries: FsEntry[];

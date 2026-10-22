@@ -18,6 +18,7 @@ const (
 	fileConfig    = "config.yaml"
 	fileSessions  = "sessions.yaml"
 	fileUIState   = "ui-state.yaml"
+	fileFavorites = "favorites.yaml"
 	fileKnownHost = "known_hosts.yaml"
 )
 
@@ -27,11 +28,12 @@ const (
 type Store struct {
 	dir string
 
-	mu       sync.RWMutex
-	cfg      Config
-	sessions []Session
-	state    UIState
-	known    map[string]KnownHost
+	mu        sync.RWMutex
+	cfg       Config
+	sessions  []Session
+	state     UIState
+	favorites []Favorite
+	known     map[string]KnownHost
 }
 
 // Open loads (or seeds) every document under dir.
@@ -78,6 +80,17 @@ func Open(dir string) (*Store, error) {
 		s.state = defaultUIState()
 	}
 	s.state = normalizeUIState(s.state)
+
+	// favorites.yaml - a missing file just means "no bookmarks yet"; it is
+	// created on the first favorite.
+	var fdoc FavoriteDoc
+	if err := readYAML(filepath.Join(dir, fileFavorites), &fdoc); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("read %s: %w", fileFavorites, err)
+		}
+		fdoc = FavoriteDoc{Version: Version}
+	}
+	s.favorites = normalizeFavorites(fdoc.Items)
 
 	var kdoc KnownHostDoc
 	if err := readYAML(filepath.Join(dir, fileKnownHost), &kdoc); err != nil {
@@ -235,6 +248,62 @@ func (s *Store) SetUIState(in UIState) error {
 	return writeYAML(filepath.Join(s.dir, fileUIState), in, 0o600)
 }
 
+// Favorites returns the bookmarked local folders in the order they were added.
+func (s *Store) Favorites() []Favorite {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]Favorite, 0, len(s.favorites))
+	out = append(out, s.favorites...)
+	return out
+}
+
+// AddFavorite bookmarks a folder. Saving the same path twice is a no-op that
+// returns the existing entry, so the caller does not have to guard against it
+// and the sidebar order stays stable.
+func (s *Store) AddFavorite(in Favorite) (Favorite, error) {
+	in.Path = strings.TrimSpace(in.Path)
+	if in.Path == "" {
+		return Favorite{}, errors.New("收藏路径不能为空")
+	}
+	in.Name = strings.TrimSpace(in.Name)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, fav := range s.favorites {
+		if fav.Path == in.Path {
+			return fav, nil
+		}
+	}
+	if in.Name == "" {
+		in.Name = in.Path
+	}
+	in.AddedAt = time.Now()
+	s.favorites = append(s.favorites, in)
+	if err := s.persistFavoritesLocked(); err != nil {
+		return Favorite{}, err
+	}
+	return in, nil
+}
+
+// RemoveFavorite drops a bookmark. Removing an unknown path is not an error:
+// two windows may race, and the desired end state (not bookmarked) holds.
+func (s *Store) RemoveFavorite(path string) error {
+	path = strings.TrimSpace(path)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kept := s.favorites[:0]
+	for _, fav := range s.favorites {
+		if fav.Path != path {
+			kept = append(kept, fav)
+		}
+	}
+	if len(kept) == len(s.favorites) {
+		return nil
+	}
+	s.favorites = kept
+	return s.persistFavoritesLocked()
+}
+
 // KnownHost returns the remembered key for host:port.
 func (s *Store) KnownHost(hostport string) (KnownHost, bool) {
 	s.mu.RLock()
@@ -283,6 +352,14 @@ func (s *Store) persistSessionsLocked() error {
 	}
 	doc := SessionDoc{Version: Version, Sessions: s.sessions}
 	return writeYAML(filepath.Join(s.dir, fileSessions), doc, 0o600)
+}
+
+func (s *Store) persistFavoritesLocked() error {
+	if s.favorites == nil {
+		s.favorites = []Favorite{}
+	}
+	doc := FavoriteDoc{Version: Version, Items: s.favorites}
+	return writeYAML(filepath.Join(s.dir, fileFavorites), doc, 0o600)
 }
 
 func (s *Store) persistKnownLocked() error {
@@ -334,6 +411,25 @@ func normalizeUIState(in UIState) UIState {
 	}
 	in.Version = Version
 	return in
+}
+
+// normalizeFavorites drops empty and duplicated entries so a hand-edited file
+// cannot make the sidebar render the same folder twice.
+func normalizeFavorites(items []Favorite) []Favorite {
+	out := make([]Favorite, 0, len(items))
+	seen := make(map[string]bool, len(items))
+	for _, fav := range items {
+		fav.Path = strings.TrimSpace(fav.Path)
+		if fav.Path == "" || seen[fav.Path] {
+			continue
+		}
+		if fav.Name == "" {
+			fav.Name = fav.Path
+		}
+		seen[fav.Path] = true
+		out = append(out, fav)
+	}
+	return out
 }
 
 // writeYAML marshals atomically: write to a sibling temp file, fsync, rename.

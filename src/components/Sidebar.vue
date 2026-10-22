@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import Icon from "./Icon.vue";
+import { errorText } from "../lib/ipc";
 import {
   connectSession,
   navigate,
   openSessionDialog,
+  removeFavorite,
   sessionById,
   state,
   toast,
@@ -39,18 +41,32 @@ const colorDot: Record<string, string> = {
 
 const remoteKey = computed(() => (state.right.side === "remote" ? "right" : "left"));
 const remotePane = computed(() => state[remoteKey.value]);
+// While a boot-time reconnect is in flight the pane has no live `sessionId`
+// yet; the pending one still deserves the "current" highlight.
+const remoteSessionId = computed(
+  () => remotePane.value.sessionId ?? remotePane.value.pendingSessionId,
+);
 
 function openPlace(path: string) {
   void navigate(localKey.value, path);
 }
 
+/** Removes a bookmark from the sidebar without leaving the list. */
+function unfavorite(path: string, name: string) {
+  void removeFavorite(path)
+    .then(() => toast("info", "已取消收藏", name))
+    .catch((error) => toast("error", "无法取消收藏", errorText(error)));
+}
+
 function openSession(id: string) {
-  const existing = remotePane.value;
-  if (existing.sessionId === id) return;
+  // Already live, or already being re-opened by the boot-time reconnect.
+  if (remoteSessionId.value === id) return;
   if (state.sessions.find((item) => item.session.id === id)?.connected) {
     const pane = remotePane.value;
     pane.side = "remote";
     pane.sessionId = id;
+    pane.pendingSessionId = null;
+    pane.restoring = false;
     pane.history = [];
     pane.historyIndex = -1;
     void navigate(remoteKey.value, sessionById(id)?.remotePath ?? ".");
@@ -92,6 +108,44 @@ function revealConfig() {
         <span class="truncate">{{ place.name }}</span>
       </button>
 
+      <!-- Bookmarks: local folders the user pinned from the file table's
+           context menu. Rendered as divs (not buttons) because each row carries
+           its own remove button, and nesting buttons is invalid HTML. -->
+      <template v-if="state.favorites.length">
+        <p class="mt-4 px-2 pb-1 text-[10px] font-semibold uppercase tracking-[0.05em] text-muted/80">
+          收藏
+        </p>
+        <div
+          v-for="fav in state.favorites"
+          :key="fav.path"
+          role="button"
+          tabindex="0"
+          class="group flex h-[27px] w-full items-center gap-2 rounded-[6px] px-2 text-[11.5px] transition-colors"
+          :class="
+            localPath === fav.path
+              ? 'bg-accent/[0.12] font-medium text-accent'
+              : 'text-ink/85 hover:bg-ink/[0.05]'
+          "
+          :title="fav.path"
+          @click="openPlace(fav.path)"
+          @keydown.enter.prevent="openPlace(fav.path)"
+        >
+          <Icon
+            name="star-filled"
+            :size="12"
+            :class="localPath === fav.path ? 'text-accent' : 'text-[#e0a63a]'"
+          />
+          <span class="min-w-0 flex-1 truncate text-left">{{ fav.name }}</span>
+          <button
+            class="shrink-0 text-muted opacity-0 transition-opacity hover:text-danger focus:opacity-100 group-hover:opacity-100"
+            :title="`取消收藏 ${fav.name}`"
+            @click.stop="unfavorite(fav.path, fav.name ?? fav.path)"
+          >
+            <Icon name="x" :size="10" />
+          </button>
+        </div>
+      </template>
+
       <div class="mt-4 flex items-center justify-between px-2 pb-1">
         <p class="text-[10px] font-semibold uppercase tracking-[0.05em] text-muted/80">会话</p>
         <button class="text-muted transition-colors hover:text-accent" title="新建会话" @click="newSession">
@@ -104,7 +158,7 @@ function revealConfig() {
         :key="item.session.id"
         class="group flex h-[30px] w-full items-center gap-2 rounded-[6px] px-2 text-left transition-colors hover:bg-ink/[0.05]"
         :class="
-          remotePane.sessionId === item.session.id
+          remoteSessionId === item.session.id
             ? 'bg-accent/[0.12]'
             : ''
         "

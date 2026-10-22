@@ -261,11 +261,14 @@ func (m *Manager) dial(ctx context.Context, sess config.Session, password string
 	if err != nil {
 		return nil, fmt.Errorf("无法连接到 %s: %w", hostport, err)
 	}
-	if deadline, ok := ctx.Deadline(); ok {
-		_ = netConn.SetDeadline(deadline)
-	} else {
-		_ = netConn.SetDeadline(time.Now().Add(timeout))
+	// The SSH banner exchange must honour the same budget as the TCP connect:
+	// a peer that accepts the socket but never speaks leaves us waiting on a
+	// read, and inheriting a longer caller deadline made "connect" look hung.
+	handshakeDeadline := time.Now().Add(timeout)
+	if deadline, ok := ctx.Deadline(); ok && deadline.Before(handshakeDeadline) {
+		handshakeDeadline = deadline
 	}
+	_ = netConn.SetDeadline(handshakeDeadline)
 
 	sshConn, chans, reqs, err := ssh.NewClientConn(netConn, hostport, sshCfg)
 	if err != nil {

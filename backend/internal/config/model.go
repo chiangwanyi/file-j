@@ -1,12 +1,13 @@
 // Package config owns every piece of state that survives an application
 // restart. Persistence is plain YAML on disk - no database, no binary blob.
 //
-// Four independent documents are kept so that a corrupt or hand-edited file
+// Five independent documents are kept so that a corrupt or hand-edited file
 // never takes down the others:
 //
 //	config.yaml       application settings (theme, transfer defaults, remote policy)
 //	sessions.yaml     saved SSH/SFTP sessions (never contains secrets)
 //	ui-state.yaml     last used folders, sort order, pane geometry
+//	favorites.yaml    bookmarked local folders shown in the sidebar
 //	known_hosts.yaml  TOFU host key fingerprints
 package config
 
@@ -106,6 +107,24 @@ type UIState struct {
 	Right      PaneState `yaml:"right" json:"right"`
 	SplitRatio float64   `yaml:"splitRatio" json:"splitRatio"` // 0.25..0.75
 	ActivePane string    `yaml:"activePane" json:"activePane"`
+}
+
+// Favorite is one bookmarked local folder in favorites.yaml.
+//
+// Only local folders are bookmarkable: an SFTP path is meaningless without its
+// session, and the sidebar already lists sessions for that job. Name is stored
+// so a renamed or vanished folder still shows something readable in the sidebar
+// instead of its last path segment.
+type Favorite struct {
+	Path    string    `yaml:"path" json:"path"`
+	Name    string    `yaml:"name,omitempty" json:"name,omitempty"`
+	AddedAt time.Time `yaml:"addedAt,omitempty" json:"addedAt,omitempty"`
+}
+
+// FavoriteDoc is the favorites.yaml document root.
+type FavoriteDoc struct {
+	Version int        `yaml:"version" json:"version"`
+	Items   []Favorite `yaml:"items" json:"items"`
 }
 
 // KnownHost is one remembered host key in known_hosts.yaml.

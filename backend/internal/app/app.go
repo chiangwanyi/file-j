@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -156,6 +157,10 @@ func (a *App) registerHandlers() {
 	h("fs.open", a.handleOpen)
 	h("fs.reveal", a.handleReveal)
 
+	h("favorite.list", a.handleFavoriteList)
+	h("favorite.add", a.handleFavoriteAdd)
+	h("favorite.remove", a.handleFavoriteRemove)
+
 	h("transfer.create", a.handleTransferCreate)
 	h("transfer.list", a.handleTransferList)
 	h("transfer.cancel", a.handleTransferCancel)
@@ -204,6 +209,7 @@ func (a *App) handleConfigGet(context.Context, json.RawMessage) (any, error) {
 			"config":     a.store.Path("config.yaml"),
 			"sessions":   a.store.Path("sessions.yaml"),
 			"uiState":    a.store.Path("ui-state.yaml"),
+			"favorites":  a.store.Path("favorites.yaml"),
 			"knownHosts": a.store.Path("known_hosts.yaml"),
 		},
 		"credentialStore": a.creds.Available(),
@@ -322,6 +328,14 @@ func (a *App) handleSessionConnect(ctx context.Context, raw json.RawMessage) (an
 	if err := decode(raw, &p); err != nil {
 		return nil, err
 	}
+	// Bound the whole handshake (DNS + TCP + SSH + SFTP) by the configured
+	// timeout. Without this the request inherits the generic 5 minute IPC
+	// budget, so a black-holed host keeps the caller waiting long after the
+	// user has given up on it.
+	timeout := time.Duration(a.store.Config().Remote.ConnectTimeoutSeconds)*time.Second + 5*time.Second
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
 	conn, err := a.remote.Connect(ctx, p.ID, p.Password)
 	if err != nil {
 		return nil, mapRemoteError(err)
@@ -608,6 +622,61 @@ func (a *App) handleReveal(_ context.Context, raw json.RawMessage) (any, error) 
 		return nil, err
 	}
 	return nil, reveal(a.local.Resolve(p.Path))
+}
+
+// ------------------------------------------------------------------ favorites
+
+type favoriteParams struct {
+	Path string `json:"path"`
+	Name string `json:"name"`
+}
+
+func (a *App) handleFavoriteList(context.Context, json.RawMessage) (any, error) {
+	return a.store.Favorites(), nil
+}
+
+// handleFavoriteAdd bookmarks a local folder. The path is resolved here (so
+// "~" or a relative path from the address bar becomes absolute) and must point
+// at an existing directory: a bookmark that cannot be opened is worse than no
+// bookmark at all.
+func (a *App) handleFavoriteAdd(_ context.Context, raw json.RawMessage) (any, error) {
+	var p favoriteParams
+	if err := decode(raw, &p); err != nil {
+		return nil, err
+	}
+	path := a.local.Resolve(p.Path)
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, protocol.Wrapf(protocol.CodeNotFound, "文件夹不存在", err.Error())
+	}
+	if !info.IsDir() {
+		return nil, protocol.Errorf(protocol.CodeBadRequest, "只能收藏文件夹")
+	}
+	name := strings.TrimSpace(p.Name)
+	if name == "" {
+		name = filepath.Base(path)
+	}
+	fav, err := a.store.AddFavorite(config.Favorite{Path: path, Name: name})
+	if err != nil {
+		return nil, protocol.Wrapf(protocol.CodeInternal, "保存收藏失败", err.Error())
+	}
+	return fav, nil
+}
+
+func (a *App) handleFavoriteRemove(_ context.Context, raw json.RawMessage) (any, error) {
+	var p favoriteParams
+	if err := decode(raw, &p); err != nil {
+		return nil, err
+	}
+	// The stored path is always absolute, but a caller may still send "~/x" or
+	// a relative form; both spellings are tried so a bookmark can always be
+	// removed. Removing an unknown path is a no-op.
+	for _, candidate := range []string{p.Path, a.local.Resolve(p.Path)} {
+		if err := a.store.RemoveFavorite(candidate); err != nil {
+			return nil, protocol.Wrapf(protocol.CodeInternal, "移除收藏失败", err.Error())
+		}
+	}
+	return map[string]bool{"ok": true}, nil
 }
 
 // -------------------------------------------------------------------- transfer

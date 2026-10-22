@@ -60,6 +60,12 @@ const icons: Record<string, string> = {
   "copy": '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>',
   "scissors":
     '<circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><path d="M20 4 8.5 15.5M8.5 8.5 20 20"/>',
+  "star":
+    '<path d="m12 3.8 2.55 5.17 5.7.83-4.13 4.02.98 5.68L12 16.82l-5.1 2.68.98-5.68L3.75 9.8l5.7-.83Z"/>',
+  // Same geometry with its own fill so a bookmarked folder reads as "on"
+  // while keeping the shared `fill="none"` root, which every other icon needs.
+  "star-filled":
+    '<path d="m12 3.8 2.55 5.17 5.7.83-4.13 4.02.98 5.68L12 16.82l-5.1 2.68.98-5.68L3.75 9.8l5.7-.83Z" fill="currentColor"/>',
   "folder-plus": '<path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4l2 2.5h9A1.5 1.5 0 0 1 21 10v7.5A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5Z"/><path d="M12 11v5M9.5 13.5h5"/>',
   "clock": '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   "search": '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',

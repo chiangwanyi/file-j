@@ -197,6 +197,72 @@ func TestUIStateRoundTrip(t *testing.T) {
 	}
 }
 
+func TestFavorites(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if got := st.Favorites(); got == nil || len(got) != 0 {
+		t.Fatalf("fresh favorites = %v, want empty slice", got)
+	}
+
+	first, err := st.AddFavorite(Favorite{Path: "/tmp/one", Name: "one"})
+	if err != nil {
+		t.Fatalf("AddFavorite: %v", err)
+	}
+	if first.AddedAt.IsZero() {
+		t.Error("AddedAt was not stamped")
+	}
+	// Same path twice must not duplicate, and must not reorder.
+	if _, err := st.AddFavorite(Favorite{Path: "/tmp/one", Name: "other"}); err != nil {
+		t.Fatalf("AddFavorite duplicate: %v", err)
+	}
+	if _, err := st.AddFavorite(Favorite{Path: "/tmp/two"}); err != nil {
+		t.Fatalf("AddFavorite: %v", err)
+	}
+
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	list := reopened.Favorites()
+	if len(list) != 2 {
+		t.Fatalf("favorites = %d, want 2", len(list))
+	}
+	if list[0].Path != "/tmp/one" || list[1].Path != "/tmp/two" {
+		t.Errorf("order = %v, want insertion order", list)
+	}
+	if list[1].Name != "/tmp/two" {
+		t.Errorf("name fallback = %q, want the path", list[1].Name)
+	}
+
+	if err := reopened.RemoveFavorite("/tmp/one"); err != nil {
+		t.Fatalf("RemoveFavorite: %v", err)
+	}
+	// Removing an unknown path is not an error (two windows may race).
+	if err := reopened.RemoveFavorite("/tmp/missing"); err != nil {
+		t.Errorf("RemoveFavorite unknown: %v", err)
+	}
+	after, _ := Open(dir)
+	if got := after.Favorites(); len(got) != 1 || got[0].Path != "/tmp/two" {
+		t.Errorf("favorites after remove = %v", got)
+	}
+
+	// A hand-edited file with blanks and duplicates is cleaned on load.
+	raw := "version: 1\nitems:\n  - path: /tmp/two\n  - path: /tmp/two\n  - path: \"\"\n"
+	if err := os.WriteFile(filepath.Join(dir, fileFavorites), []byte(raw), 0o600); err != nil {
+		t.Fatalf("write favorites.yaml: %v", err)
+	}
+	cleaned, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open cleaned: %v", err)
+	}
+	if got := cleaned.Favorites(); len(got) != 1 {
+		t.Errorf("cleaned favorites = %v, want 1", got)
+	}
+}
+
 func TestKnownHosts(t *testing.T) {
 	dir := t.TempDir()
 	st, _ := Open(dir)
