@@ -30,3 +30,6 @@ backend/bin/
 
 # local development config (contains demo sessions/credentials refs)
 .devconfig/
+
+# WorkBuddy project data (local memory/logs, not part of the source tree)
+.workbuddy/
