@@ -15,6 +15,7 @@ import {
   goForward,
   goUp,
   navigate,
+  openSessionDialog,
   pane,
   refreshPane,
   selectedEntries,
@@ -131,7 +132,7 @@ function quickConnect(id: string) {
 }
 
 function openSessionManager() {
-  state.dialog.session = true;
+  openSessionDialog("edit");
 }
 </script>
 

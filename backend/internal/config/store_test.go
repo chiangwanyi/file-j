@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestOpenSeedsDefaults(t *testing.T) {
@@ -99,6 +100,64 @@ func TestSessionsCRUD(t *testing.T) {
 	}
 	if len(reopened.Sessions()) != 0 {
 		t.Errorf("sessions after delete = %d", len(reopened.Sessions()))
+	}
+}
+
+func TestSaveSessionAddsEveryConnection(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	// Regression: saving a second/third connection used to be indistinguishable
+	// from updating the first one, so only one session ever survived.
+	ids := map[string]bool{}
+	for _, name := range []string{"prod", "staging", "backup"} {
+		saved, serr := st.SaveSession(Session{Name: name, Host: name + ".example.com", User: "deploy"})
+		if serr != nil {
+			t.Fatalf("SaveSession %s: %v", name, serr)
+		}
+		if saved.ID == "" {
+			t.Fatalf("SaveSession %s: id not generated", name)
+		}
+		if ids[saved.ID] {
+			t.Fatalf("SaveSession %s: duplicate id %q", name, saved.ID)
+		}
+		ids[saved.ID] = true
+	}
+
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	list := reopened.Sessions()
+	if len(list) != 3 {
+		t.Fatalf("sessions = %d, want 3", len(list))
+	}
+	if _, err := reopened.SaveSession(Session{Name: "used", Host: "used.example.com", User: "deploy",
+		LastUsedAt: time.Now().Add(-time.Hour)}); err != nil {
+		t.Fatalf("SaveSession used: %v", err)
+	}
+
+	// Ordering: never-connected sessions fall back to CreatedAt, so a freshly
+	// added connection is not buried under sessions used long ago.
+	freshDir := t.TempDir()
+	fresh, err := Open(freshDir)
+	if err != nil {
+		t.Fatalf("Open fresh: %v", err)
+	}
+	if _, err := fresh.SaveSession(Session{
+		Name: "old", Host: "old.example.com", User: "deploy",
+		LastUsedAt: time.Now().Add(-time.Hour),
+	}); err != nil {
+		t.Fatalf("SaveSession old: %v", err)
+	}
+	if _, err := fresh.SaveSession(Session{Name: "new", Host: "new.example.com", User: "deploy"}); err != nil {
+		t.Fatalf("SaveSession new: %v", err)
+	}
+	if got := fresh.Sessions()[0].Name; got != "new" {
+		t.Errorf("first session = %q, want new", got)
 	}
 }
 

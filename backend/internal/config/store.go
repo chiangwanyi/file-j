@@ -118,15 +118,27 @@ func (s *Store) SetConfig(in Config) (Config, error) {
 }
 
 // Sessions returns every saved session, most recently used first.
+//
+// A session that was saved but never connected has a zero LastUsedAt, which
+// would push it to the bottom of the list; it falls back to CreatedAt so a
+// freshly added connection appears at the top where the user expects it.
 func (s *Store) Sessions() []Session {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]Session, len(s.sessions))
 	copy(out, s.sessions)
 	sort.SliceStable(out, func(i, j int) bool {
-		return out[i].LastUsedAt.After(out[j].LastUsedAt)
+		return sessionStamp(out[i]).After(sessionStamp(out[j]))
 	})
 	return out
+}
+
+// sessionStamp is the time a session is sorted by.
+func sessionStamp(s Session) time.Time {
+	if !s.LastUsedAt.IsZero() {
+		return s.LastUsedAt
+	}
+	return s.CreatedAt
 }
 
 // Session looks up one session by ID.

@@ -4,6 +4,7 @@ import Modal from "./Modal.vue";
 import Icon from "./Icon.vue";
 import {
   closePasswordDialog,
+  closeSessionDialog,
   connectSession,
   deleteSession,
   loadSessions,
@@ -58,7 +59,12 @@ function fill(session: Session) {
 
 function selectSession(id: string) {
   const item = state.sessions.find((entry) => entry.session.id === id);
-  if (!item) return;
+  if (!item) {
+    // The session disappeared (deleted elsewhere): fall back to a blank form
+    // rather than leaving stale values in the fields.
+    newSession();
+    return;
+  }
   selectedId.value = id;
   fill(item.session);
 }
@@ -73,12 +79,16 @@ watch(
   () => state.dialog.session,
   (open) => {
     if (!open) return;
-    if (state.sessions.length) {
-      const preferred = selectedId.value ?? state.sessions[0].session.id;
-      selectSession(preferred);
-    } else {
+    // The mode is consumed once: every open starts from a known state instead
+    // of inheriting whatever the component was showing last time.
+    const mode = state.dialog.sessionMode;
+    state.dialog.sessionMode = "edit";
+    if (mode === "create" || state.sessions.length === 0) {
       newSession();
+      return;
     }
+    const preferred = selectedId.value ?? state.sessions[0].session.id;
+    selectSession(preferred);
   },
   { immediate: true },
 );
@@ -141,7 +151,13 @@ async function onTest() {
 
 async function onSave() {
   const saved = await persist();
-  if (saved) toast("success", "会话已保存", `${saved.user}@${saved.host}:${saved.port}`);
+  if (saved) {
+    toast(
+      "success",
+      "会话已保存",
+      `${saved.user}@${saved.host}:${saved.port} · 共 ${state.sessions.length} 个会话`,
+    );
+  }
 }
 
 async function onConnect() {
@@ -149,7 +165,7 @@ async function onConnect() {
   if (!saved) return;
   const ok = await connectSession(saved.id, password.value);
   if (ok) {
-    state.dialog.session = false;
+    closeSessionDialog();
     closePasswordDialog();
   }
 }
@@ -185,13 +201,15 @@ const authOptions: { value: AuthMethod; label: string }[] = [
     subtitle="SSH / SFTP 连接保存在 sessions.yaml，密码存入系统钥匙串"
     icon="server"
     width="720px"
-    @close="state.dialog.session = false"
+    @close="closeSessionDialog()"
   >
     <div class="flex gap-4" style="min-height: 380px">
       <!-- list -->
       <div class="flex w-[190px] shrink-0 flex-col">
         <div class="mb-1 flex items-center justify-between px-1">
-          <span class="text-[10px] font-semibold uppercase tracking-wide text-muted">已保存</span>
+          <span class="text-[10px] font-semibold uppercase tracking-wide text-muted">
+            已保存 {{ state.sessions.length }}
+          </span>
           <button class="icon-btn h-5 w-5" title="新建会话" @click="newSession">
             <Icon name="plus" :size="12" />
           </button>

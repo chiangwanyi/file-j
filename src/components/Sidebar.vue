@@ -4,6 +4,7 @@ import Icon from "./Icon.vue";
 import {
   connectSession,
   navigate,
+  openSessionDialog,
   sessionById,
   state,
   toast,
@@ -59,7 +60,10 @@ function openSession(id: string) {
 }
 
 function newSession() {
-  state.dialog.session = true;
+  // "create" matters: opening the manager in edit mode would select the session
+  // used last time, so the connection the user just typed in would be written
+  // over instead of added.
+  openSessionDialog("create");
 }
 
 function revealConfig() {

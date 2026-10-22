@@ -13,6 +13,7 @@ import Icon from "./components/Icon.vue";
 import { defaultConfigDir } from "./lib/platform";
 import {
   boot,
+  closeSessionDialog,
   createFolder,
   deleteSelection,
   goBack,
@@ -89,7 +90,7 @@ function moveSelection(delta: number) {
 function onKeydown(event: KeyboardEvent) {
   if (event.key === "Escape") {
     if (state.dialog.session || state.dialog.settings) {
-      state.dialog.session = false;
+      closeSessionDialog();
       state.dialog.settings = false;
       return;
     }

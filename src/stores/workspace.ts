@@ -84,6 +84,14 @@ export interface PasswordDialogState {
   busy: boolean;
 }
 
+/**
+ * How the session dialog was opened. "create" makes the dialog start from a
+ * blank form so a second (third, …) connection can be added; without it the
+ * dialog always reopens on the previously selected session and saving silently
+ * overwrites it - which is why only one session ever survived.
+ */
+export type SessionDialogMode = "edit" | "create";
+
 export interface PromptDialogState {
   title: string;
   label: string;
@@ -102,6 +110,7 @@ export interface ConfirmDialogState {
 
 interface DialogState {
   session: boolean;
+  sessionMode: SessionDialogMode;
   settings: boolean;
   password: PasswordDialogState | null;
   prompt: PromptDialogState | null;
@@ -130,6 +139,7 @@ export const state = reactive({
   splitRatio: 0.5,
   dialog: {
     session: false,
+    sessionMode: "edit" as SessionDialogMode,
     settings: false,
     password: null,
     prompt: null,
@@ -505,6 +515,20 @@ export function selectByPath(key: PaneKey, path: string): void {
 }
 
 // ------------------------------------------------------------------ sessions
+
+/**
+ * Opens the session manager. Pass "create" for the "新建会话" entry points so
+ * the form starts empty instead of editing whichever session was selected last.
+ */
+export function openSessionDialog(mode: SessionDialogMode = "edit"): void {
+  state.dialog.sessionMode = mode;
+  state.dialog.session = true;
+}
+
+export function closeSessionDialog(): void {
+  state.dialog.session = false;
+  state.dialog.sessionMode = "edit";
+}
 
 export async function loadSessions(): Promise<void> {
   state.sessions = await rpc.request<SessionItem[]>("session.list");

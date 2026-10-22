@@ -26,7 +26,7 @@ import (
 // version is overridden at build time:
 //
 //	go build -ldflags "-X main.version=1.2.3" ./cmd/file-jd
-var version = "0.1.0-dev"
+var version = "0.1.1-dev"
 
 func main() {
 	var (
